@@ -748,9 +748,14 @@ input {
 }
 
 .qr-overlay img {
+    position: absolute;
+    top: 300px;
+    left: 45%;
+    transform: translateX(-50%);
     display: block;
     max-width: 90vw;
     height: auto;
+    scale: 0.5;
 }
 
 .qr-overlay .qr-code {
