@@ -1,13 +1,115 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="es">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Document</title>
+    <title>AIDA Face Cut Experience</title>
     <link rel="stylesheet" href="styles/styles.css">
 </head>
+
 <body>
-    <h1>Hello World</h1>
-    <script src="scripts/script.js"></script>
+    <!-- viewport full screen -->
+    <div id="viewport">
+        <!-- stage: base 1080x1920 escalado por JS -->
+        <main id="stage" role="application" aria-live="polite">
+            <div class="frame-overlay" aria-hidden="true"></div>
+
+            <!-- VIEW: HOME -->
+            <section class="view is-active home-view" data-view="home">
+                <div class="content home">
+                    <img class="home-logo" src="assets/Logo.png" alt="AIDA y vuelta">
+
+                    <div class="home-title">
+                        <img class="home-text-crea" src="assets/Pantalla1/Type-Svg/crea.svg" alt="Crea tu">
+                        <img class="home-text-cartel" src="assets/Pantalla1/Type-Svg/Cartel.svg" alt="Cartel">
+                    </div>
+
+                    <div class="home-faces">
+                        <button class="face-btn" type="button" data-action="start" data-careta-id="aida"
+                            aria-label="Seleccionar careta 1">
+                            <img src="assets/Pantalla1/1.png" alt="Careta 1">
+                        </button>
+                        <button class="face-btn" type="button" data-action="start" data-careta-id="fidel"
+                            aria-label="Seleccionar careta 2">
+                            <img src="assets/Pantalla1/2.png" alt="Careta 2">
+                        </button>
+                        <button class="face-btn" type="button" data-action="start" data-careta-id="hija"
+                            aria-label="Seleccionar careta 3">
+                            <img src="assets/Pantalla1/3.png" alt="Careta 3">
+                        </button>
+                        <button class="face-btn" type="button" data-action="start" data-careta-id="hijo"
+                            aria-label="Seleccionar careta 4">
+                            <img src="assets/Pantalla1/4.png" alt="Careta 4">
+                        </button>
+                        <button class="face-btn" type="button" data-action="start" data-careta-id="machu"
+                            aria-label="Seleccionar careta 5">
+                            <img src="assets/Pantalla1/5.png" alt="Careta 5">
+                        </button>
+                        <button class="face-btn" type="button" data-action="start" data-careta-id="paz"
+                            aria-label="Seleccionar careta 6">
+                            <img src="assets/Pantalla1/6.png" alt="Careta 6">
+                        </button>
+                    </div>
+
+                    <img class="home-text-selecciona" src="assets/Pantalla1/Type-Svg/Selecciona.svg"
+                        alt="Selecciona tus gafas favoritas">
+                </div>
+            </section>
+
+            <!-- VIEW: CAPTURE -->
+            <section class="view" data-view="capture">
+                <div class="content capture">
+                    <div class="camera-shell">
+                        <canvas id="cameraCanvas"></canvas>
+                        <video id="camera" muted playsinline></video>
+                        <img class="capture-text" src="assets/Pantalla2/Texto.svg"
+                            alt="Sitúa tu rostro y pulsa continuar">
+                        <img class="capture-circle" src="assets/Pantalla2/CirculoCara.png" alt="">
+                        <img class="capture-counter" src="assets/Pantalla2/Contador/3Contador.png" alt="">
+                        <button class="capture-btn" type="button" data-action="capture" aria-label="Continuar">
+                            <img src="assets/Pantalla2/Boton.png" alt="Continuar">
+                        </button>
+                    </div>
+
+                    <p class="capture-instructions is-hidden">Coloca tu rostro en el área de vista y sonríe.</p>
+                    <p class="camera-status is-hidden" id="cameraStatus" role="status"></p>
+                </div>
+
+                <footer class="bottombar is-hidden"></footer>
+            </section>
+
+            <!-- VIEW: SEND -->
+            <section class="view" data-view="send">
+                <div class="content send poster">
+                    <img class="poster-cines" src="assets/Pantalla3/Cines.svg" alt="30 enero solo en cines">
+
+                    <div class="poster-head">
+                        <img id="photoPreview" src="data:," alt="Cartel generado">
+                    </div>
+
+                    <img class="poster-logo" src="assets/Logo.png" alt="Logo">
+                    <img class="poster-paco" src="assets/Pantalla3/Paco.svg" alt="Dirigida por Paco León">
+                    <img class="poster-logos" src="assets/Pantalla3/logos.svg" alt="Logos">
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <div id="externalModal" class="modal is-hidden" role="dialog" aria-modal="true" aria-label="Formulario promocional">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content">
+            <button class="modal-close" type="button" data-action="close-modal"
+                aria-label="Cerrar formulario">✕</button>
+            <iframe id="externalFrame" title="Formulario Sony Pictures" loading="lazy"></iframe>
+        </div>
+    </div>
+
+    <div id="qrOverlay" class="qr-overlay is-hidden" aria-hidden="true">
+        <img class="qr-code" src="assets/Pantalla4/qr.png" alt="QR de la promo">
+    </div>
+
+    <script src="scripts/index.js"></script>
 </body>
+
 </html>
