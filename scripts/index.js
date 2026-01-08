@@ -109,8 +109,13 @@ async function getGlassesImage(careta) {
     if (glassesCache.has(careta.id)) return glassesCache.get(careta.id);
 
     const candidates = [];
-    for (const ext of GLASSES.exts) candidates.push(`${GLASSES.dir}/${careta.id}.${ext}`);
+    // Nombres nuevos: “<num>Gafas.png” (p.ej. 1Gafas.png)
+    candidates.push(`${GLASSES.dir}/${careta.num}Gafas.png`);
+    // Fallback por id con sufijo Gafas
+    candidates.push(`${GLASSES.dir}/${careta.id}Gafas.png`);
+    // Fallback antiguos: sin sufijo
     for (const ext of GLASSES.exts) candidates.push(`${GLASSES.dir}/${careta.num}.${ext}`);
+    for (const ext of GLASSES.exts) candidates.push(`${GLASSES.dir}/${careta.id}.${ext}`);
 
     let img = null;
     for (const src of candidates) {
@@ -218,6 +223,8 @@ const el = {
     cameraStatus: document.getElementById("cameraStatus"),
     photoPreview: document.getElementById("photoPreview"),
     captureCounter: document.querySelector(".capture-counter"),
+    captureProgress: document.querySelector(".capture-progress"),
+    captureProgressFg: document.querySelector(".capture-progress-fg"),
     captureBtn: document.querySelector('[data-view="capture"] [data-action="capture"]'),
     externalModal: document.getElementById("externalModal"),
     externalFrame: document.getElementById("externalFrame"),
@@ -244,6 +251,7 @@ const state = {
     // countdown
     isCounting: false,
     countdownTimer: null,
+    progressReq: null,
 };
 
 /* =========================
@@ -280,6 +288,9 @@ function stopCountdown() {
     state.countdownTimer = null;
     state.isCounting = false;
     if (el.captureCounter) el.captureCounter.classList.add("is-hidden");
+    if (state.progressReq) cancelAnimationFrame(state.progressReq);
+    state.progressReq = null;
+    if (el.captureProgress) el.captureProgress.classList.remove("is-active");
 }
 
 function setCountdownImage(n) {
@@ -296,8 +307,28 @@ function setCountdownImage(n) {
     el.captureCounter.classList.add("is-pulse");
 }
 
+function startProgress(durationMs) {
+    if (!el.captureProgress || !el.captureProgressFg) return;
+    const circumference = 339.292; // stroke-dasharray set in CSS
+    el.captureProgress.classList.add("is-active");
+    el.captureProgressFg.style.strokeDasharray = `${circumference}`;
+    const start = performance.now();
+    const tick = (now) => {
+        const t = Math.min(1, (now - start) / durationMs);
+        const offset = circumference * (1 - t);
+        el.captureProgressFg.style.strokeDashoffset = `${offset}`;
+        if (t < 1) {
+            state.progressReq = requestAnimationFrame(tick);
+        }
+    };
+    state.progressReq = requestAnimationFrame(tick);
+}
+
 function runCountdown() {
     const steps = [3, 2, 1];
+    const stepMs = 800;
+    const total = steps.length * stepMs;
+    startProgress(total);
     return new Promise((resolve) => {
         let idx = 0;
         const tick = () => {
@@ -307,7 +338,7 @@ function runCountdown() {
             }
             setCountdownImage(steps[idx]);
             idx += 1;
-            state.countdownTimer = setTimeout(tick, 800);
+            state.countdownTimer = setTimeout(tick, stepMs);
         };
         tick();
     });
