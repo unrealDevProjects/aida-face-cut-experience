@@ -294,6 +294,7 @@ input {
     background: transparent;
     border-radius: 24px;
     box-shadow: var(--shadow);
+    transform: scaleX(-1);
 }
 
 #camera {
@@ -328,6 +329,35 @@ input {
     top: 160px;
     right: 120px;
     width: 90px;
+}
+
+
+.capture-countdown {
+    position: absolute;
+    top: 160px;
+    right: 120px;
+    width: 90px;
+    height: 90px;
+    display: grid;
+    place-items: center;
+    pointer-events: none;
+}
+
+.capture-countdown.is-hidden,
+.view[data-view="capture"] .capture-countdown.is-hidden {
+    display: none !important;
+    opacity: 0 !important;
+}
+
+.capture-countdown-num {
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    font-style: normal;
+    font-weight: 900;
+    line-height: 1;
+    text-align: center;
+    color: #fff;
+    text-shadow: 0 10px 18px rgb(0 0 0 / .22);
+    transform: none;
 }
 
 .capture-btn {
@@ -444,20 +474,6 @@ input {
     border-radius: 22px;
     overflow: hidden;
     box-shadow: 0 30px 80px rgb(0 0 0 / .55);
-}
-
-.modal-close {
-    position: absolute;
-    top: 12px;
-    right: 12px;
-    z-index: 2;
-    width: 44px;
-    height: 44px;
-    border-radius: 12px;
-    border: 0;
-    background: rgb(255 255 255 / .12);
-    color: #fff;
-    cursor: pointer;
 }
 
 .modal-content iframe {
@@ -581,44 +597,40 @@ input {
 
 .view[data-view="capture"] .capture-glasses-guide.is-hidden { display: none; }
 
-.view[data-view="capture"] .capture-countdown{
+
+.view[data-view="capture"] .capture-countdown {
     position: absolute;
     top: var(--cap-counter-y);
     left: var(--cap-counter-x);
+    right: auto;
     width: var(--cap-counter-w);
     height: var(--cap-counter-w);
-    right: auto;
-    z-index: 26;
-    pointer-events: none;
     opacity: .98;
+    pointer-events: none;
+    z-index: 26; /* por encima del anillo */
     display: grid;
     place-items: center;
     transition: opacity .2s ease, transform .25s ease;
 }
 
-.view[data-view="capture"] .capture-countdown-num{
+.view[data-view="capture"] .capture-countdown-num {
     font-family: inherit;
     font-weight: 900;
     font-style: normal;
-    /* tamaño: ligado al contenedor para que todos los números midan igual (incluido el “1”) */
-    font-size: calc(var(--cap-counter-w) * 0.92);
+    font-size: calc(var(--cap-counter-w) * 0.78);
     line-height: 1;
     letter-spacing: -0.02em;
     color: #fff;
-    /* micro “look” parecido al arte: un pelín de skew + sombra */
-    transform: translateY(0.02em);
     text-shadow: 0 10px 18px rgb(0 0 0 / .22);
     user-select: none;
+    transform: none;
 }
 
-.capture-countdown.is-hidden{
-    opacity: 0;
-    transform: scale(0.9);
-}
-
-.capture-countdown.is-pulse{
+.capture-countdown.is-pulse .capture-countdown-num {
     transform: scale(1.06);
+    transition: transform .22s ease;
 }
+
 .view[data-view="capture"] .capture-btn {
     bottom: 150px;
     left: 50%;
@@ -773,16 +785,33 @@ input {
 /* Botón cerrar siempre clicable */
 .modal-close {
     position: absolute;
-    top: 12px;
-    right: 12px;
+    top: 20px;
+    right: 20px;
     z-index: 3;
-    width: 44px;
-    height: 44px;
-    border-radius: 12px;
-    border: 0;
-    background: rgb(255 255 255 / .12);
+    width: 80px;
+    height: 80px;
+    border-radius: 50%;
+    border: 4px solid #fff;
+    background: #e50914;
     color: #fff;
+    font-size: 38px;
+    font-weight: 700;
+    line-height: 1;
     cursor: pointer;
+    box-shadow: 0 8px 28px rgb(0 0 0 / .6);
+    transition: transform .15s ease, background .15s ease, box-shadow .15s ease;
+    display: grid;
+    place-items: center;
+}
+
+.modal-close:hover {
+    transform: scale(1.15);
+    background: #ff1a1a;
+    box-shadow: 0 12px 36px rgb(0 0 0 / .7);
+}
+
+.modal-close:active {
+    transform: scale(0.92);
 }
 
 /* Iframe al 100% */
@@ -918,10 +947,10 @@ input {
   z-index:2;
 }
 
-/* “Cine” solo visual: no altera el PNG final */
+/* "Cine" solo visual: no altera el PNG final */
 #cameraCanvas.is-cinematic{
   filter: blur(.45px) saturate(1.04) contrast(1.03);
-  transform: translateZ(0);
+  transform: scaleX(-1) translateZ(0);
 }
 
 /* Progreso circular (solo si UX.enableProgressRing = true) */

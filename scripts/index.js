@@ -86,6 +86,292 @@ const COMPOSE = {
     useGlassesGuide: true, // si existe #glassesGuide, se usa para posicionar las gafas
 };
 
+/* =========================
+   MediaPipe (head-only): pelo + cara + orejas (skin)
+   Objetivo: en Pantalla 3 te quedas SOLO con cabeza (sin cuerpo) sin usar máscara circular cutre.
+   Nota: ejecutamos el matting SOLO en el freeze-frame (capture), no en tiempo real.
+========================= */
+
+// Pin de versión para que NO te cambie el bundle/wasm por sorpresa en producción.
+// Si mañana Google rompe algo, tu kiosko sigue funcionando.
+const MP = {
+    version: "0.10.22-rc.20250304",
+    bundleUrl() {
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${this.version}/vision_bundle.mjs`;
+    },
+    wasmBase() {
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${this.version}/wasm`;
+    },
+};
+
+const HEAD_SEG = {
+    enabled: true,
+
+    // ✅ Recomendado: servir local para modo “offline”.
+    // Si no existe el archivo, verás un warning claro en consola.
+    modelAssetPath: "assets/models/selfie_multiclass_256x256.tflite",
+
+    wasmPath: MP.wasmBase(),
+    delegate: "GPU", // "GPU" | "CPU"
+
+    // Mejor pelo/borde → confidence masks.
+    useConfidenceMasks: true,
+
+    // Gating geométrico: elimina hombros aunque el modelo tenga dudas.
+    ellipse: {
+        enabled: true,
+        rx: 1.05,
+        ry: 1.55,
+        yUp: 0.08,
+    },
+
+    // Suavizado del borde (en la máscara 256x256)
+    featherPx: 2,
+
+    // Qué clases se quedan (labels dinámicos).
+    keep: {
+        hair: true,
+        face: true,
+        skin: true,          // piel/orejas (pero NO body-skin)
+        accessories: false,  // no te mantiene gafas reales; las virtuales las pintamos después
+    },
+};
+
+let mpSeg = {
+    ready: false,
+    imageSegmenter: null,
+    labels: [],
+    keepIdx: [],
+    FilesetResolver: null,
+    ImageSegmenter: null,
+};
+
+// Reusable mask canvas (evita allocs cada captura)
+const _maskCanvas = document.createElement("canvas");
+const _maskCtx = _maskCanvas.getContext("2d", { willReadFrequently: true });
+
+const clamp01 = (v) => (v < 0 ? 0 : (v > 1 ? 1 : v));
+
+// Box blur barato (Float32 alpha). Suficiente para feather.
+function boxBlurFloat(src, w, h, r = 2) {
+    if (!r || r < 1) return src;
+    const tmp = new Float32Array(src.length);
+    const dst = new Float32Array(src.length);
+    const win = r * 2 + 1;
+
+    // horizontal
+    for (let y = 0; y < h; y++) {
+        let sum = 0;
+        const row = y * w;
+        for (let x = -r; x <= r; x++) {
+            const xx = Math.min(w - 1, Math.max(0, x));
+            sum += src[row + xx];
+        }
+        for (let x = 0; x < w; x++) {
+            tmp[row + x] = sum / win;
+            const xOut = x - r;
+            const xIn = x + r + 1;
+            if (xOut >= 0) sum -= src[row + xOut];
+            if (xIn < w) sum += src[row + xIn];
+            else sum += src[row + (w - 1)];
+        }
+    }
+
+    // vertical
+    for (let x = 0; x < w; x++) {
+        let sum = 0;
+        for (let y = -r; y <= r; y++) {
+            const yy = Math.min(h - 1, Math.max(0, y));
+            sum += tmp[yy * w + x];
+        }
+        for (let y = 0; y < h; y++) {
+            dst[y * w + x] = sum / win;
+            const yOut = y - r;
+            const yIn = y + r + 1;
+            if (yOut >= 0) sum -= tmp[yOut * w + x];
+            if (yIn < h) sum += tmp[yIn * w + x];
+            else sum += tmp[(h - 1) * w + x];
+        }
+    }
+    return dst;
+}
+
+function resolveKeepIndices(labels) {
+    const keepIdx = [];
+    const L = (labels || []).map((s) => String(s || "").toLowerCase());
+
+    const wantHair = !!HEAD_SEG.keep.hair;
+    const wantFace = !!HEAD_SEG.keep.face;
+    const wantSkin = !!HEAD_SEG.keep.skin;
+    const wantAcc = !!HEAD_SEG.keep.accessories;
+
+    for (let i = 0; i < L.length; i++) {
+        const name = L[i];
+        const isHair = wantHair && name.includes("hair");
+        const isFace = wantFace && (name.includes("face") || name.includes("facial"));
+        // Mantén skin excepto “body-skin”
+        const isSkin = wantSkin && name.includes("skin") && !name.includes("body");
+        const isAcc = wantAcc && name.includes("accessor");
+        if (isHair || isFace || isSkin || isAcc) keepIdx.push(i);
+    }
+
+    // fallback (selfie_multiclass típico)
+    // 0 background | 1 hair | 2 body-skin | 3 face-skin | 4 clothes | 5 accessories
+    if (!keepIdx.length) {
+        if (HEAD_SEG.keep.hair) keepIdx.push(1);
+        if (HEAD_SEG.keep.face || HEAD_SEG.keep.skin) keepIdx.push(3);
+        if (HEAD_SEG.keep.accessories) keepIdx.push(5);
+    }
+    return keepIdx;
+}
+
+async function initHeadSegmenter() {
+    if (!HEAD_SEG.enabled) return false;
+    if (mpSeg.ready && mpSeg.imageSegmenter) return true;
+
+    try {
+        // Import ESM desde CDN (por eso index.js va como type="module")
+        if (!mpSeg.FilesetResolver || !mpSeg.ImageSegmenter) {
+            const mod = await import(MP.bundleUrl());
+            mpSeg.FilesetResolver = mod.FilesetResolver;
+            mpSeg.ImageSegmenter = mod.ImageSegmenter;
+        }
+
+        const vision = await mpSeg.FilesetResolver.forVisionTasks(HEAD_SEG.wasmPath);
+
+        mpSeg.imageSegmenter = await mpSeg.ImageSegmenter.createFromOptions(vision, {
+            baseOptions: {
+                modelAssetPath: HEAD_SEG.modelAssetPath,
+                delegate: HEAD_SEG.delegate,
+            },
+            runningMode: "IMAGE",
+            outputCategoryMask: !HEAD_SEG.useConfidenceMasks,
+            outputConfidenceMasks: !!HEAD_SEG.useConfidenceMasks,
+        });
+
+        mpSeg.labels = mpSeg.imageSegmenter.getLabels?.() || [];
+        mpSeg.keepIdx = resolveKeepIndices(mpSeg.labels);
+        mpSeg.ready = true;
+        console.log("[HEAD_SEG] Ready", { labels: mpSeg.labels, keepIdx: mpSeg.keepIdx });
+        return true;
+    } catch (e) {
+        console.warn("[HEAD_SEG] No se pudo inicializar (seguimos sin recorte de cabeza)", e);
+        mpSeg.ready = false;
+        mpSeg.imageSegmenter = null;
+        return false;
+    }
+}
+
+function buildAlphaMaskFromResult(result, keepIdx) {
+    // Confidence masks (float 0..1)
+    if (result?.confidenceMasks?.length) {
+        const masks = result.confidenceMasks;
+        const w = masks[0]?.width ?? masks[0]?.getWidth?.();
+        const h = masks[0]?.height ?? masks[0]?.getHeight?.();
+        if (!w || !h) return null;
+
+        const alpha = new Float32Array(w * h);
+        for (const k of keepIdx) {
+            const m = masks[k];
+            if (!m) continue;
+            const arr = m.getAsFloat32Array?.();
+            if (!arr || arr.length !== alpha.length) continue;
+            for (let i = 0; i < alpha.length; i++) {
+                const v = arr[i];
+                if (v > alpha[i]) alpha[i] = v;
+            }
+        }
+
+        // cleanup
+        masks.forEach((m) => m?.close?.());
+        return { w, h, alpha };
+    }
+
+    // Category mask (uint8 label per pixel)
+    if (result?.categoryMask) {
+        const m = result.categoryMask;
+        const w = m.width ?? m.getWidth?.();
+        const h = m.height ?? m.getHeight?.();
+        const arr = m.getAsUint8Array?.();
+        if (!w || !h || !arr) return null;
+
+        const keepSet = new Set(keepIdx);
+        const alpha = new Float32Array(w * h);
+        for (let i = 0; i < alpha.length; i++) {
+            alpha[i] = keepSet.has(arr[i]) ? 1 : 0;
+        }
+
+        m.close?.();
+        return { w, h, alpha };
+    }
+
+    return null;
+}
+
+function applyEllipseGate(alpha, mw, mh, guide, outW, outH) {
+    if (!HEAD_SEG.ellipse.enabled || !guide) return;
+    const cx = (guide.cx / outW) * mw;
+    const cy = ((guide.cy - guide.r * HEAD_SEG.ellipse.yUp) / outH) * mh;
+    const rx = (guide.r * HEAD_SEG.ellipse.rx / outW) * mw;
+    const ry = (guide.r * HEAD_SEG.ellipse.ry / outH) * mh;
+
+    const invRx2 = 1 / Math.max(1e-6, rx * rx);
+    const invRy2 = 1 / Math.max(1e-6, ry * ry);
+
+    for (let y = 0; y < mh; y++) {
+        for (let x = 0; x < mw; x++) {
+            const dx = x - cx;
+            const dy = y - cy;
+            if ((dx * dx) * invRx2 + (dy * dy) * invRy2 > 1) {
+                alpha[y * mw + x] = 0;
+            }
+        }
+    }
+}
+
+function alphaToMaskCanvas(alpha, mw, mh) {
+    _maskCanvas.width = mw;
+    _maskCanvas.height = mh;
+    const img = _maskCtx.createImageData(mw, mh);
+    const d = img.data;
+    for (let i = 0; i < alpha.length; i++) {
+        const a = Math.round(clamp01(alpha[i]) * 255);
+        const o = i * 4;
+        d[o] = 255;
+        d[o + 1] = 255;
+        d[o + 2] = 255;
+        d[o + 3] = a;
+    }
+    _maskCtx.putImageData(img, 0, 0);
+    return _maskCanvas;
+}
+
+async function applyHeadSegmentationToCanvas(canvasEl, guideCirclePx) {
+    const ok = await initHeadSegmenter();
+    if (!ok || !mpSeg.imageSegmenter) return false;
+
+    const result = await mpSeg.imageSegmenter.segment(canvasEl);
+    const mask = buildAlphaMaskFromResult(result, mpSeg.keepIdx);
+    if (!mask) return false;
+
+    // gate + feather
+    applyEllipseGate(mask.alpha, mask.w, mask.h, guideCirclePx, canvasEl.width, canvasEl.height);
+    if (HEAD_SEG.featherPx > 0) {
+        mask.alpha = boxBlurFloat(mask.alpha, mask.w, mask.h, HEAD_SEG.featherPx);
+    }
+
+    const maskCanvas = alphaToMaskCanvas(mask.alpha, mask.w, mask.h);
+
+    const ctx = canvasEl.getContext("2d", { alpha: true });
+    ctx.save();
+    ctx.globalCompositeOperation = "destination-in";
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(maskCanvas, 0, 0, canvasEl.width, canvasEl.height);
+    ctx.restore();
+    return true;
+}
+
 
 const HEAD_PRESETS = {
     tight: { cropW: 2.10, cropH: 2.35, yUp: 1.08, maskY: 0.48, maskRX: 0.47, maskRY: 0.52 },
@@ -679,7 +965,7 @@ function scaleStage() {
 function bumpIdle() {
     if (state.idlePaused) return;
     clearTimeout(state.idleTimer);
-    state.idleTimer = setTimeout(() => setView("home"), APP.idleMs);
+    state.idleTimer = setTimeout(() => location.reload(), APP.idleMs);
 }
 
 function stopRedirect() {
@@ -742,12 +1028,18 @@ function setCountdownNumber(n) {
 
     if (n === null || n === undefined) {
         cd.classList.add("is-hidden");
+        cd.setAttribute("aria-hidden", "true");
         cd.classList.remove("is-pulse");
         return;
     }
 
     numEl.textContent = String(n);
     cd.classList.remove("is-hidden");
+    cd.setAttribute("aria-hidden", "false");
+
+    // Mantén el anillo pegado al número (si se tunea counterX/Y/W en caliente)
+    positionProgressRing();
+
     cd.classList.remove("is-pulse");
     // reflow para reiniciar animación
     void cd.offsetWidth;
@@ -773,7 +1065,7 @@ function startProgress(durationMs) {
 
 function runCountdown() {
     const steps = [5, 4, 3, 2, 1, 0];
-    const stepMs = 800;
+    const stepMs = 1000;
     const lastMs = 250; // el 0 se ve un instante y dispara captura
     const total = (steps.length - 1) * stepMs + lastMs;
 
@@ -1162,6 +1454,10 @@ async function setView(next) {
 
         await waitVideoReady(el.camera);
 
+        // Warm-up MediaPipe (no bloquea la UI). Si falla, seguimos igual.
+        // Esto evita que la primera captura tenga “lag” por cargar wasm/model.
+        initHeadSegmenter();
+
         state.hasFrame = false;
         setCaptureEnabled(false);
         if (el.cameraCanvas) el.cameraCanvas.style.visibility = "hidden";
@@ -1340,6 +1636,18 @@ async function capturePhoto() {
     const octx = out.getContext("2d", { alpha: true });
     octx.clearRect(0, 0, out.width, out.height);
     octx.drawImage(preview, 0, 0);
+
+    // ✅ Head-only (pelo + cara + orejas): aplicamos máscara sobre el freeze-frame.
+    // Importante: lo hacemos ANTES de pintar las gafas virtuales.
+    if (HEAD_SEG.enabled) {
+        try {
+            const guide = getGuideCirclePx();
+            const masked = await applyHeadSegmentationToCanvas(out, guide);
+            if (!masked) console.warn("[HEAD_SEG] Máscara no aplicada (sin resultados)." );
+        } catch (e) {
+            console.warn("[HEAD_SEG] Falló el recorte de cabeza; seguimos con el frame entero.", e);
+        }
+    }
 
     const careta = state.selectedCareta || CARETAS[0];
     const glassesImg = await getGlassesImage(careta);
