@@ -339,6 +339,9 @@ input {
     border: 0;
     padding: 0;
     cursor: pointer;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
 }
 
 .capture-btn img {
@@ -538,6 +541,22 @@ input {
     scale: 0.7;
 }
 
+.view[data-view="capture"] .capture-glasses-guide {
+    position: absolute;
+    top: 320px; /* ajuste fino: sube/baja para alinear con los ojos */
+    left: 45%;
+    transform: translateX(-50%);
+    width: 620px;
+    max-width: none;
+    opacity: .32;
+    pointer-events: none;
+    z-index: 22; /* encima del círculo, debajo del contador */
+    filter: drop-shadow(0 10px 18px rgb(0 0 0 / .18));
+    mix-blend-mode: screen;
+}
+
+.view[data-view="capture"] .capture-glasses-guide.is-hidden { display: none; }
+
 .view[data-view="capture"] .capture-counter {
     top: 250px;
     right: 190px;
@@ -656,6 +675,9 @@ input {
     /* las rellena el JS en scaleStage() */
     --stage-px-w: 100vw;
     --stage-px-h: 100vh;
+    --stage-px-x: 0px;
+    --stage-px-y: 0px;
+    --stage-scale: 1;
 }
 
 /* En vez de blur, oscurecemos el stage */
@@ -734,34 +756,156 @@ input {
     filter: none !important;
 }
 
-/* QR overlay al cerrar modal */
-.qr-overlay {
+/* QR overlay (visible debajo del iframe y también tras cerrarlo) */
+.qr-overlay{
+    /* Centrado REAL dentro del stage (no del viewport) */
     position: fixed;
-    inset: 0;
+    left: var(--stage-px-x);
+    top: var(--stage-px-y);
+    width: var(--stage-px-w);
+    height: var(--stage-px-h);
+
     display: grid;
-    justify-items: center;
-    align-content: end;
-    gap: 18px;
+    place-items: center;
+
     z-index: 900; /* bajo el modal (z=999) pero sobre el dim */
     pointer-events: none;
-    padding: 32px 32px 72px;
 }
 
-.qr-overlay img {
-    position: absolute;
-    top: 300px;
-    left: 45%;
-    transform: translateX(-50%);
-    display: block;
-    max-width: 90vw;
+.qr-overlay .qr-code{
+    width: min(460px, 54%);
     height: auto;
-    scale: 0.5;
+    cursor: pointer;
+    pointer-events: auto;
+
+    filter: drop-shadow(0 18px 28px rgb(0 0 0 / .35));
+    transition: transform .18s ease, filter .18s ease;
 }
 
-.qr-overlay .qr-code {
-    width: 360px;
+.qr-overlay .qr-code:hover{
+    transform: scale(1.06);
+    filter: drop-shadow(0 22px 34px rgb(0 0 0 / .42));
 }
 
-.qr-overlay.is-hidden {
+.qr-overlay .qr-code:active,
+.qr-overlay .qr-code.is-pressed{
+    transform: scale(0.96);
+    filter: drop-shadow(0 14px 22px rgb(0 0 0 / .30));
+}
+.qr-overlay.is-hidden{
     display: none;
+}
+
+/* =========================
+   PATCH: kiosk feedback / anti-spam / cine (add-only)
+   No afecta a tu UI salvo cuando hay estados (loading/error/countdown).
+========================= */
+
+.camera-status{
+  position:absolute;
+  top: 140px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  max-width: 860px;
+  padding: 14px 18px;
+  border-radius: 999px;
+  background: rgb(0 0 0 / .35);
+  color: rgb(255 255 255 / .92);
+  font-size: 22px;
+  text-align:center;
+  box-shadow: var(--soft);
+  backdrop-filter: blur(6px);
+  pointer-events: none;
+}
+.camera-status.is-error{ background: rgb(0 0 0 / .55); }
+.camera-status.is-ready{ background: rgb(0 0 0 / .40); }
+.camera-status.is-pulse{ animation: statusPulse .28s ease; }
+@keyframes statusPulse{
+  0%{ transform: translateX(-50%) scale(.98); }
+  60%{ transform: translateX(-50%) scale(1.03); }
+  100%{ transform: translateX(-50%) scale(1); }
+}
+
+.capture-btn[disabled]{ cursor:not-allowed; }
+.capture-btn[disabled] img{
+  opacity:.55;
+  filter: grayscale(.12) brightness(.9);
+  transform:none !important;
+}
+
+/* Fix “botón pillado”: no dependemos de :active del navegador */
+.capture-btn:active img{
+  transform:none;
+  filter:none;
+}
+.capture-btn.is-pressed img{
+  transform: scale(0.96);
+  filter: drop-shadow(0 12px 18px rgb(0 0 0 / .22)) brightness(0.97);
+}
+
+/* =========================
+   HOTFIX P0: Pantalla 3 sin círculo / sin re-escala
+   La foto final es el freeze-frame de Pantalla 2, a pantalla completa.
+========================= */
+
+.view[data-view="send"] .poster-head{
+  position:absolute;
+  inset:0;
+  width:100%;
+  height:100%;
+  top:0;
+  left:0;
+  transform:none;
+  z-index:1;
+}
+
+.view[data-view="send"] .poster-head img{
+  width:100%;
+  height:100%;
+  border-radius:0;
+  object-fit:cover;
+}
+
+.view[data-view="send"] .poster-cines,
+.view[data-view="send"] .poster-logo,
+.view[data-view="send"] .poster-paco,
+.view[data-view="send"] .poster-logos{
+  z-index:2;
+}
+
+/* “Cine” solo visual: no altera el PNG final */
+#cameraCanvas.is-cinematic{
+  filter: blur(.45px) saturate(1.04) contrast(1.03);
+  transform: translateZ(0);
+}
+
+/* Progreso circular (solo si UX.enableProgressRing = true) */
+.capture-progress{
+  position:absolute;
+  top: 250px;
+  right: 190px;
+  width: 150px;
+  height: 150px;
+  z-index: 25;
+  opacity: 0;
+  transform: scale(.92);
+  transition: opacity .2s ease, transform .2s ease;
+  pointer-events:none;
+}
+.capture-progress.is-active{ opacity: 1; transform: scale(1); }
+.capture-progress-bg{
+  stroke: rgb(255 255 255 / .22);
+  stroke-width: 10;
+  fill:none;
+}
+.capture-progress-fg{
+  stroke: rgb(255 255 255 / .92);
+  stroke-width: 10;
+  fill:none;
+  stroke-linecap: round;
+  transform: rotate(-90deg);
+  transform-origin: 50% 50%;
+  stroke-dasharray: 339.292;
+  stroke-dashoffset: 339.292;
 }
