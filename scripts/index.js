@@ -20,7 +20,7 @@ const UX = {
     targetFps: 30,
     cinematicCss: true,
     readyToastMs: 1200,
-    enableProgressRing: false, // P2: si lo queréis, lo inyectamos sin tocar HTML
+    enableProgressRing: true, // P2: si lo queréis, lo inyectamos sin tocar HTML
 };
 
 // Caretas (dejas esto como lo tenías)
@@ -209,6 +209,11 @@ function applyCaptureTune(tune = {}) {
         counterY: "--cap-counter-y",
         counterW: "--cap-counter-w",
 
+        // Aliases (más memorizable en consola)
+        capCounterX: "--cap-counter-x",
+        capCounterY: "--cap-counter-y",
+        capCounterW: "--cap-counter-w",
+
         glassesNudgeX: "--cap-glasses-nudge-x",
         glassesNudgeY: "--cap-glasses-nudge-y",
         glassesNudgeS: "--cap-glasses-nudge-s",
@@ -220,7 +225,10 @@ function applyCaptureTune(tune = {}) {
     }
 
     // Resync inmediato (si mueves variables “en caliente” quieres feedback ya)
-    requestAnimationFrame(() => syncGlassesGuideToCircle());
+    requestAnimationFrame(() => {
+        syncGlassesGuideToCircle();
+        positionProgressRing();
+    });
 }
 
 function loadCaptureTune() {
@@ -250,6 +258,7 @@ function startCaptureLayoutSync() {
         if (t - capSync.last >= CAPTURE_TUNE.syncEveryMs) {
             capSync.last = t;
             syncGlassesGuideToCircle();
+            positionProgressRing();
         }
         capSync.raf = requestAnimationFrame(tick);
     };
@@ -444,7 +453,8 @@ const el = {
     camera: document.getElementById("camera"),
     cameraStatus: document.getElementById("cameraStatus"),
     photoPreview: document.getElementById("photoPreview"),
-    captureCounter: document.querySelector(".capture-counter"),
+    captureCountdown: document.querySelector(".capture-countdown"),
+    captureCountdownNum: document.querySelector(".capture-countdown-num"),
     captureProgress: document.querySelector(".capture-progress"),
     captureProgressFg: document.querySelector(".capture-progress-fg"),
     captureBtn: document.querySelector('[data-view="capture"] [data-action="capture"]'),
@@ -603,6 +613,37 @@ function ensureProgressRing() {
     // refresca references
     el.captureProgress = svg;
     el.captureProgressFg = fg;
+
+    // Mantén el anillo pegado al número (tuneable)
+    positionProgressRing();
+}
+function ensureCountdownDom() {
+    const captureView = document.querySelector('[data-view="capture"]');
+    if (!captureView) return;
+
+    // Si existe el nuevo contenedor, refrescamos refs y listo.
+    let cd = captureView.querySelector(".capture-countdown");
+    if (!cd) {
+        cd = document.createElement("div");
+        cd.className = "capture-countdown is-hidden";
+        cd.setAttribute("aria-hidden", "true");
+
+        const num = document.createElement("div");
+        num.className = "capture-countdown-num";
+        num.textContent = "5";
+        cd.appendChild(num);
+
+        // Lo colgamos del mismo nivel que el anillo (overlay/view), para que siga la jerarquía actual.
+        const overlay = captureView.querySelector(".capture-overlay") || captureView;
+        overlay.appendChild(cd);
+    }
+
+    el.captureCountdown = cd;
+    el.captureCountdownNum = cd.querySelector(".capture-countdown-num");
+
+    // Legacy: si alguien dejó el <img class="capture-counter">, lo escondemos para que no “pise”.
+    const legacy = captureView.querySelector(".capture-counter");
+    if (legacy) legacy.classList.add("is-hidden");
 }
 
 
@@ -629,7 +670,10 @@ function scaleStage() {
     document.documentElement.style.setProperty("--stage-px-y", `${y}px`);
     document.documentElement.style.setProperty("--stage-scale", `${scale}`);
 // Si estamos en la pantalla de captura, re-sincronizamos la guía de gafas tras el reflow.
-    if (state.view === "capture") requestAnimationFrame(() => syncGlassesGuideToCircle());
+    if (state.view === "capture") requestAnimationFrame(() => {
+        syncGlassesGuideToCircle();
+        positionProgressRing();
+    });
 }
 
 function bumpIdle() {
@@ -654,24 +698,60 @@ function stopCountdown() {
     clearTimeout(state.countdownTimer);
     state.countdownTimer = null;
     state.isCounting = false;
-    if (el.captureCounter) el.captureCounter.classList.add("is-hidden");
+    if (el.captureCountdown) {
+        el.captureCountdown.classList.add("is-hidden");
+        el.captureCountdown.classList.remove("is-pulse");
+    }
+    // Legacy: si aún existe el <img class="capture-counter">, lo escondemos para no depender de assets.
+    const legacyCounter = document.querySelector(".capture-counter");
+    if (legacyCounter) legacyCounter.classList.add("is-hidden");
     if (state.progressReq) cancelAnimationFrame(state.progressReq);
     state.progressReq = null;
     if (el.captureProgress) el.captureProgress.classList.remove("is-active");
 }
 
-function setCountdownImage(n) {
-    if (!el.captureCounter) return;
-    if (!n) {
-        el.captureCounter.classList.add("is-hidden");
+
+
+function positionProgressRing() {
+    if (!el.captureProgress) return;
+
+    const scope = getCaptureTuneScope();
+    if (!scope) return;
+
+    const cs = getComputedStyle(scope);
+    const cx = cs.getPropertyValue("--cap-counter-x").trim() || "50%";
+    const cy = cs.getPropertyValue("--cap-counter-y").trim() || "250px";
+    const cwRaw = cs.getPropertyValue("--cap-counter-w").trim() || "150px";
+
+    const cw = parseFloat(cwRaw) || 150;
+    const pad = Math.round(cw * 0.22); // margen del anillo respecto al número
+
+    el.captureProgress.style.left = `calc(${cx} - ${pad}px)`;
+    el.captureProgress.style.top = `calc(${cy} - ${pad}px)`;
+    el.captureProgress.style.right = "auto";
+    el.captureProgress.style.width = `${cw + pad * 2}px`;
+    el.captureProgress.style.height = `${cw + pad * 2}px`;
+}
+function setCountdownNumber(n) {
+    // Aseguramos DOM (por si entraste en capture antes de actualizar el HTML)
+    ensureCountdownDom();
+
+    const cd = el.captureCountdown;
+    const numEl = el.captureCountdownNum;
+    if (!cd || !numEl) return;
+
+    if (n === null || n === undefined) {
+        cd.classList.add("is-hidden");
+        cd.classList.remove("is-pulse");
         return;
     }
-    el.captureCounter.src = `assets/Pantalla2/Contador/${n}Contador.png`;
-    el.captureCounter.classList.remove("is-hidden");
-    el.captureCounter.classList.remove("is-pulse");
+
+    numEl.textContent = String(n);
+    cd.classList.remove("is-hidden");
+    cd.classList.remove("is-pulse");
     // reflow para reiniciar animación
-    void el.captureCounter.offsetWidth;
-    el.captureCounter.classList.add("is-pulse");
+    void cd.offsetWidth;
+    cd.classList.add("is-pulse");
 }
 
 function startProgress(durationMs) {
@@ -692,9 +772,11 @@ function startProgress(durationMs) {
 }
 
 function runCountdown() {
-    const steps = [3, 2, 1];
+    const steps = [5, 4, 3, 2, 1, 0];
     const stepMs = 800;
-    const total = steps.length * stepMs;
+    const lastMs = 250; // el 0 se ve un instante y dispara captura
+    const total = (steps.length - 1) * stepMs + lastMs;
+
     startProgress(total);
 
     // Token para poder cancelar sin dejar Promises colgadas.
@@ -704,20 +786,25 @@ function runCountdown() {
         let idx = 0;
         const tick = () => {
             if (state.countdownToken !== token) {
-                setCountdownImage(null);
+                setCountdownNumber(null);
                 return resolve(false);
             }
+
             if (idx >= steps.length) {
-                setCountdownImage(null);
+                setCountdownNumber(null);
                 return resolve(true);
             }
-            setCountdownImage(steps[idx]);
+
+            setCountdownNumber(steps[idx]);
+
+            const wait = (idx === steps.length - 1) ? lastMs : stepMs;
             idx += 1;
-            state.countdownTimer = setTimeout(tick, stepMs);
+            state.countdownTimer = setTimeout(tick, wait);
         };
         tick();
     });
 }
+
 
 function closeModal(opts = {}) {
     const { keepQR = false, keepDim = false } = opts || {};
@@ -1055,6 +1142,7 @@ async function setView(next) {
 
     if (next === "capture") {
         ensureProgressRing();
+        ensureCountdownDom();
 
         // ✅ Capa de tuning persistente (venue-ready)
         applyCaptureTune(loadCaptureTune());
@@ -1084,8 +1172,6 @@ async function setView(next) {
         state.renderReq = requestAnimationFrame(renderFrame);
 
         stopCountdown();
-        setCountdownImage(3);
-        setCountdownImage(null);
 
         if (el.qrOverlay) el.qrOverlay.classList.add("is-hidden");
     }
