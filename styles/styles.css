@@ -489,6 +489,33 @@ input {
 /* CAPTURE — full-bleed (canvas grande + overlays como referencia) */
 .view[data-view="capture"] {
     display: block;
+
+    /* =========================================================
+       ✅ CAPTURE TUNE (TOCAR SOLO ESTO EN EL VENUE)
+       Edita estos valores y verás cambios inmediatos en:
+       - Círculo/guía de cara
+       - Guía de gafas (se posiciona por JS, pero con nudges manuales)
+       - Contador
+       --------------------------------------------------------- */
+
+    /* Centro del “pack” (cara + gafas). 50% = centrado perfecto */
+    --cap-x: 50%;
+    /* Sube/baja todo el pack (en px dentro del stage 1080×1920) */
+    --cap-y: 250px;
+
+    /* Tamaño de la guía de cara (px) */
+    --cap-circle-w: 560px;
+
+    /* ✅ GAFAS: el JS las alinea con el círculo.
+       Estos 3 valores son tu “volante” para afinar in situ. */
+    --cap-glasses-nudge-x: 0px;  /* +derecha / -izquierda */
+    --cap-glasses-nudge-y: 0px;  /* +abajo   / -arriba */
+    --cap-glasses-nudge-s: 1;    /* 1 = igual, 1.08 = +8% */
+
+    /* Contador: independiente, pero por defecto sigue el pack */
+    --cap-counter-x: calc(var(--cap-x) + 330px);
+    --cap-counter-y: calc(var(--cap-y) + 30px);
+    --cap-counter-w: 150px;
 }
 
 .view[data-view="capture"] .content.capture {
@@ -531,22 +558,19 @@ input {
 }
 
 .view[data-view="capture"] .capture-circle {
-    top: 220px;
-    left: 45%;
+    top: var(--cap-y);
+    left: var(--cap-x);
     transform: translateX(-50%);
-    width: 520px;
+    width: var(--cap-circle-w);
     max-width: none;
     opacity: .98;
     pointer-events: none;
-    scale: 0.7;
 }
 
 .view[data-view="capture"] .capture-glasses-guide {
     position: absolute;
-    top: 320px; /* ajuste fino: sube/baja para alinear con los ojos */
-    left: 45%;
-    transform: translateX(-50%);
-    width: 620px;
+    /* ⚠️ top/left/width los setea el JS para que coincida con la composición.
+       Si necesitas afinar, usa --cap-glasses-nudge-x / y / s en CAPTURE TUNE. */
     max-width: none;
     opacity: .32;
     pointer-events: none;
@@ -558,9 +582,10 @@ input {
 .view[data-view="capture"] .capture-glasses-guide.is-hidden { display: none; }
 
 .view[data-view="capture"] .capture-counter {
-    top: 250px;
-    right: 190px;
-    width: 110px;
+    top: var(--cap-counter-y);
+    left: var(--cap-counter-x);
+    right: auto;
+    width: var(--cap-counter-w);
     opacity: .98;
     pointer-events: none;
     transition: opacity .2s ease, transform .25s ease;

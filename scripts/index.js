@@ -166,6 +166,138 @@ async function updateGlassesGuide() {
 
 // P0: “linkear” silueta de gafas con la guía del círculo (Pantalla 2)
 // Resultado: lo que ves alineado en Pantalla 2 es exactamente lo que se compone en Pantalla 3.
+
+// Lee variables CSS (px o número). Sirve para ajustar en vivo sin tocar JS.
+function readCssVarNumber(scopeEl, varName, fallback) {
+    try {
+        const raw = getComputedStyle(scopeEl).getPropertyValue(varName).trim();
+        if (!raw) return fallback;
+        const n = parseFloat(raw);
+        return Number.isFinite(n) ? n : fallback;
+    } catch {
+        return fallback;
+    }
+}
+
+/* =========================
+   CAPTURE TUNE (persistente) + Sync continuo
+   - Evita el “me muevo y otro bloque me lo pisa”.
+   - Permite calibrar en venue sin editar JS (persistencia en localStorage).
+========================= */
+
+const CAPTURE_TUNE = {
+    storageKey: "kiosk_capture_tune_v1",
+    syncEveryMs: 120, // 80–160ms = responde bien sin quemar CPU
+};
+
+const capSync = { raf: null, last: 0 };
+
+function getCaptureTuneScope() {
+    return document.querySelector('.view[data-view="capture"]') || document.documentElement;
+}
+
+function applyCaptureTune(tune = {}) {
+    const scope = getCaptureTuneScope();
+    if (!scope) return;
+
+    const map = {
+        capX: "--cap-x",
+        capY: "--cap-y",
+        capCircleW: "--cap-circle-w",
+
+        counterX: "--cap-counter-x",
+        counterY: "--cap-counter-y",
+        counterW: "--cap-counter-w",
+
+        glassesNudgeX: "--cap-glasses-nudge-x",
+        glassesNudgeY: "--cap-glasses-nudge-y",
+        glassesNudgeS: "--cap-glasses-nudge-s",
+    };
+
+    for (const [k, cssVar] of Object.entries(map)) {
+        if (tune[k] === undefined || tune[k] === null) continue;
+        scope.style.setProperty(cssVar, String(tune[k]));
+    }
+
+    // Resync inmediato (si mueves variables “en caliente” quieres feedback ya)
+    requestAnimationFrame(() => syncGlassesGuideToCircle());
+}
+
+function loadCaptureTune() {
+    try {
+        const raw = localStorage.getItem(CAPTURE_TUNE.storageKey);
+        if (!raw) return {};
+        const obj = JSON.parse(raw);
+        return obj && typeof obj === "object" ? obj : {};
+    } catch {
+        return {};
+    }
+}
+
+function saveCaptureTune(obj) {
+    try {
+        localStorage.setItem(CAPTURE_TUNE.storageKey, JSON.stringify(obj || {}));
+    } catch { }
+}
+
+function startCaptureLayoutSync() {
+    stopCaptureLayoutSync();
+    capSync.last = 0;
+
+    const tick = (t) => {
+        if (state.view !== "capture") return;
+
+        if (t - capSync.last >= CAPTURE_TUNE.syncEveryMs) {
+            capSync.last = t;
+            syncGlassesGuideToCircle();
+        }
+        capSync.raf = requestAnimationFrame(tick);
+    };
+
+    capSync.raf = requestAnimationFrame(tick);
+}
+
+function stopCaptureLayoutSync() {
+    if (capSync.raf) cancelAnimationFrame(capSync.raf);
+    capSync.raf = null;
+}
+
+// API de calibración rápida (DevTools-friendly)
+function exposeTuneApi() {
+    if (window.KIOSK_TUNE) return;
+
+    window.KIOSK_TUNE = {
+        get() {
+            return loadCaptureTune();
+        },
+        set(patch = {}) {
+            const cur = loadCaptureTune();
+            const next = { ...cur, ...patch };
+            saveCaptureTune(next);
+            applyCaptureTune(next);
+            return next;
+        },
+        reset() {
+            try { localStorage.removeItem(CAPTURE_TUNE.storageKey); } catch { }
+
+            // Volvemos a valores “de fábrica” (CSS) quitando solo lo que tocamos.
+            const scope = getCaptureTuneScope();
+            if (scope) {
+                [
+                    "--cap-x", "--cap-y", "--cap-circle-w",
+                    "--cap-counter-x", "--cap-counter-y", "--cap-counter-w",
+                    "--cap-glasses-nudge-x", "--cap-glasses-nudge-y", "--cap-glasses-nudge-s",
+                ].forEach((v) => scope.style.removeProperty(v));
+            }
+
+            requestAnimationFrame(() => syncGlassesGuideToCircle());
+            return {};
+        },
+    };
+}
+
+
+
 function syncGlassesGuideToCircle() {
     if (state.view !== "capture") return;
     const guideEl = el.glassesGuide;
@@ -193,9 +325,20 @@ function syncGlassesGuideToCircle() {
     const cropCx = (cr.left + cr.width / 2 - sr.left) / scaleX;
     const cropCy = (cr.top + cr.height / 2 - sr.top) / scaleY;
 
-    const cx = cropCx + (fit.x - 0.5) * cropSize;
-    const cy = cropCy + (fit.y - 0.5) * cropSize;
-    const w = Math.max(10, fit.s * cropSize);
+    // Base (linkeada al círculo)
+    let cx = cropCx + (fit.x - 0.5) * cropSize;
+    let cy = cropCy + (fit.y - 0.5) * cropSize;
+    let w = Math.max(10, fit.s * cropSize);
+
+    // ✅ Nudges manuales desde CSS (CAPTURE TUNE)
+    const capView = document.querySelector('.view[data-view="capture"]') || document.documentElement;
+    const nudgeX = readCssVarNumber(capView, '--cap-glasses-nudge-x', 0);
+    const nudgeY = readCssVarNumber(capView, '--cap-glasses-nudge-y', 0);
+    const nudgeS = readCssVarNumber(capView, '--cap-glasses-nudge-s', 1);
+
+    cx += nudgeX;
+    cy += nudgeY;
+    w = Math.max(10, w * (nudgeS || 1));
 
     guideEl.style.left = `${cx}px`;
     guideEl.style.top = `${cy}px`;
@@ -884,7 +1027,7 @@ function stopCamera() {
 ========================= */
 
 async function setView(next) {
-    if (state.view === "capture" && next !== "capture") stopCamera();
+    if (state.view === "capture" && next !== "capture") { stopCamera(); stopCaptureLayoutSync(); }
     if (state.view === "send" && next !== "send") { stopRedirect(); stopQrReturn(); }
 
     const activeEl = document.activeElement;
@@ -912,7 +1055,13 @@ async function setView(next) {
 
     if (next === "capture") {
         ensureProgressRing();
+
+        // ✅ Capa de tuning persistente (venue-ready)
+        applyCaptureTune(loadCaptureTune());
+        exposeTuneApi();
+
         updateGlassesGuide();
+        startCaptureLayoutSync();
 
         if (UX.cinematicCss && el.cameraCanvas) el.cameraCanvas.classList.add("is-cinematic");
 
@@ -1204,5 +1353,7 @@ document.addEventListener("visibilitychange", () => {
 window.addEventListener("resize", scaleStage);
 initCaptureButtonUX();
 initQrButtonUX();
+exposeTuneApi();
+applyCaptureTune(loadCaptureTune());
 scaleStage();
 bumpIdle();
