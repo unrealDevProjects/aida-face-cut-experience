@@ -3,7 +3,7 @@
 const APP = {
     baseW: 1080,
     baseH: 1920,
-    idleMs: 60_000,
+    idleMs: 30_000,
     autoAdvanceMs: 220,
     apiEndpoint: "",
 };
@@ -11,8 +11,8 @@ const APP = {
 // Render / calidad
 const CAM = {
     maxW: 1080,
-    maxH: 1600,
-    dprCap: 1, // 1 = estable en kiosko; 1.5 = más nítido (más CPU)
+    maxH: 1920,
+    dprCap: 2, // 1 = estable en kiosko; 2 = más nítido (más CPU)
 };
 
 // UX / “cine” (no cambia tu layout; solo estados y rendimiento)
@@ -356,7 +356,7 @@ async function applyHeadSegmentationToCanvas(canvasEl, guideCirclePx) {
 
     // gate + feather
     applyEllipseGate(mask.alpha, mask.w, mask.h, guideCirclePx, canvasEl.width, canvasEl.height);
-    if (HEAD_SEG.featherPx > 0) {
+    if (HEAD_SEG.featherPx > 1) {
         mask.alpha = boxBlurFloat(mask.alpha, mask.w, mask.h, HEAD_SEG.featherPx);
     }
 
@@ -763,6 +763,7 @@ const state = {
     idlePaused: false,
     renderReq: null,
     lastRenderTs: 0,
+    canvasDpr: 1,
     hasFrame: false,
     lastCrop: null, // { sx, sy, sw, sh, out }
 
@@ -1123,19 +1124,32 @@ function closeModal(opts = {}) {
 ========================= */
 
 function resizeCameraCanvas() {
-    if (!el.cameraCanvas) return;
+    if (!el.cameraCanvas) return 1;
 
     const rect = el.cameraCanvas.getBoundingClientRect();
-    const dpr = Math.min(CAM.dprCap, window.devicePixelRatio || 1);
 
-    const w = Math.min(CAM.maxW, Math.max(1, Math.floor(rect.width * dpr)));
-    const h = Math.min(CAM.maxH, Math.max(1, Math.floor(rect.height * dpr)));
+    // DPR "deseado" (según dispositivo), pero OJO:
+    // si CAM.maxW/maxH capan el canvas, NO podemos aplicar ese DPR.
+    // Si lo aplicas igualmente, acabas dibujando a la mitad de resolución y re-escalando → imagen blanda.
+    const targetDpr = Math.min(CAM.dprCap, window.devicePixelRatio || 1);
+
+    const w = Math.min(CAM.maxW, Math.max(1, Math.floor(rect.width * targetDpr)));
+    const h = Math.min(CAM.maxH, Math.max(1, Math.floor(rect.height * targetDpr)));
 
     if (el.cameraCanvas.width !== w || el.cameraCanvas.height !== h) {
         el.cameraCanvas.width = w;
         el.cameraCanvas.height = h;
     }
+
+    // DPR efectivo REAL (el que de verdad tiene el canvas ahora mismo)
+    const effDprX = rect.width ? (el.cameraCanvas.width / rect.width) : 1;
+    const effDprY = rect.height ? (el.cameraCanvas.height / rect.height) : 1;
+    const effDpr = Math.max(1, Math.min(targetDpr, effDprX, effDprY));
+
+    state.canvasDpr = effDpr;
+    return effDpr;
 }
+
 
 function stopRenderLoop() {
     if (state.renderReq) cancelAnimationFrame(state.renderReq);
@@ -1174,10 +1188,9 @@ function renderFrame(now = performance.now()) {
         return;
     }
 
-    resizeCameraCanvas();
+    const dpr = resizeCameraCanvas();
 
-    // ✅ FIX DPR (antes lo capabas a 1 sí o sí)
-    const dpr = Math.min(CAM.dprCap, window.devicePixelRatio || 1);
+    // ✅ DPR efectivo (evita downsample+upscale cuando el canvas está capado por CAM.maxW/maxH)
 
     // object-fit: cover manual
     const cw = c.width / dpr;
@@ -1189,6 +1202,8 @@ function renderFrame(now = performance.now()) {
     const sy = Math.floor((vh - sh) / 2);
 
     ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cw, ch);
     ctx.drawImage(v, sx, sy, sw, sh, 0, 0, cw, ch);
@@ -1363,9 +1378,14 @@ async function startCamera() {
         showCameraStatus("Activando cámara…", { kind: "info" });
 
         const stream = await navigator.mediaDevices.getUserMedia({
-            video: { width: { ideal: 1920 }, height: { ideal: 1080 }, facingMode: "user" },
+            video: {
+                facingMode: "user",
+                width: { ideal: 1920, max: 1920 },  // tu cámara es 1080p: pedimos 1920×1080 para evitar fallback a 640×480
+                height: { ideal: 1080, max: 1080 },
+                frameRate: { ideal: 30, max: 30 },
+            },
             audio: false,
-        });
+        })
 
         state.stream = stream;
         el.camera.srcObject = stream;
