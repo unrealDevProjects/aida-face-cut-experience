@@ -10,8 +10,8 @@ const APP = {
 
 // Render / calidad
 const CAM = {
-    maxW: 1080,
-    maxH: 1920,
+    maxW: 2160,
+    maxH: 3840,
     dprCap: 2, // 1 = estable en kiosko; 2 = más nítido (más CPU)
 };
 
@@ -81,8 +81,10 @@ const HEAD = {
 
 // Composición: “lo que ves es lo que sale” (la guía manda)
 const COMPOSE = {
-    pad: 1.55,        // cuánto aire alrededor de la guía de cara (1.35–1.75)
-    maskScale: 0.98,  // 1 = círculo perfecto; <1 come un poco el borde
+    pad: 1.18,        // cuánto aire alrededor de la guía de cara (1.10–1.45)
+    maskScale: 1.0,  
+    useCircleMask: false, // ✅ OFF: ya recortamos con MediaPipe (evita “círculo” alrededor)
+// 1 = círculo perfecto; <1 come un poco el borde
     useGlassesGuide: true, // si existe #glassesGuide, se usa para posicionar las gafas
 };
 
@@ -127,6 +129,14 @@ const HEAD_SEG = {
 
     // Suavizado del borde (en la máscara 256x256)
     featherPx: 2,
+
+    // Halo rojo (Broadcast) en pelo: decontaminación contra BG_RGB usando el alpha de MediaPipe
+    haloFix: {
+        enabled: true,
+        strength: 0.92, // 0..1 (sube si aún ves rojo en pelo)
+        alphaMin: 8,    // solo toca el borde (alpha entre alphaMin y 254)
+    },
+
 
     // Qué clases se quedan (labels dinámicos).
     keep: {
@@ -369,6 +379,28 @@ async function applyHeadSegmentationToCanvas(canvasEl, guideCirclePx) {
     ctx.imageSmoothingQuality = "high";
     ctx.drawImage(maskCanvas, 0, 0, canvasEl.width, canvasEl.height);
     ctx.restore();
+
+    // =========================
+    // POST-HALO FIX (red decontam)
+    // Quita contaminación del fondo rojo en el borde (pelo) usando el alpha.
+    // =========================
+    if (HEAD_SEG.haloFix?.enabled) {
+        const img = ctx.getImageData(0, 0, canvasEl.width, canvasEl.height);
+        const d = img.data;
+        const bgR = BG_RGB[0], bgG = BG_RGB[1], bgB = BG_RGB[2];
+        const k = clamp01(HEAD_SEG.haloFix.strength ?? 0.92);
+        const aMin = Math.max(1, (HEAD_SEG.haloFix.alphaMin ?? 8) | 0);
+
+        for (let i = 0; i < d.length; i += 4) {
+            const a = d[i + 3];
+            if (a >= aMin && a < 255) {
+                const out = decontaminateAgainstBg(d[i], d[i + 1], d[i + 2], a, bgR, bgG, bgB, k);
+                d[i] = out[0]; d[i + 1] = out[1]; d[i + 2] = out[2];
+            }
+        }
+        cleanRgbWhenTransparent(d, bgR, bgG, bgB);
+        ctx.putImageData(img, 0, 0);
+    }
     return true;
 }
 
@@ -656,6 +688,35 @@ function waitVideoReady(v) {
 
 function clamp255(x) {
     return x < 0 ? 0 : x > 255 ? 255 : x;
+}
+
+
+
+function decontaminateAgainstBg(r, g, b, a255, bgR, bgG, bgB, strength = 1.0) {
+    // Unmix / decontamination using alpha:
+    // fg = (c - bg*(1-a))/a . Blended by strength to avoid harsh edges/noise.
+    if (a255 <= 0 || a255 >= 255) return [r, g, b];
+    const a = a255 / 255;
+    const inv = 1 - a;
+
+    let fr = (r - bgR * inv) / Math.max(1e-6, a);
+    let fg = (g - bgG * inv) / Math.max(1e-6, a);
+    let fb = (b - bgB * inv) / Math.max(1e-6, a);
+
+    fr = r + (fr - r) * strength;
+    fg = g + (fg - g) * strength;
+    fb = b + (fb - b) * strength;
+
+    return [clamp255(fr) | 0, clamp255(fg) | 0, clamp255(fb) | 0];
+}
+
+function cleanRgbWhenTransparent(data, bgR, bgG, bgB) {
+    // Prevent color bleed on fully transparent pixels when scaling/interpolating.
+    for (let i = 0; i < data.length; i += 4) {
+        if (data[i + 3] === 0) {
+            data[i] = bgR; data[i + 1] = bgG; data[i + 2] = bgB;
+        }
+    }
 }
 
 function smoothstep01(t) {
@@ -966,6 +1027,10 @@ function scaleStage() {
 function bumpIdle() {
     if (state.idlePaused) return;
     clearTimeout(state.idleTimer);
+    
+    // Si ya estás en home, no hagas nada (evita parpadeo innecesario)
+    if (state.view === "home") return;
+    
     state.idleTimer = setTimeout(() => location.reload(), APP.idleMs);
 }
 
@@ -1587,21 +1652,46 @@ function extractHeadCanvas(previewCanvas) {
     sy = Math.max(0, Math.min(sy, previewCanvas.height - crop));
 
     ctx.drawImage(previewCanvas, sx, sy, crop, crop, 0, 0, cut.width, cut.height);
-
-    // Máscara circular (poster actual ya lo trata como círculo)
-    ctx.save();
-    ctx.globalCompositeOperation = "destination-in";
-    ctx.beginPath();
-    ctx.arc(cut.width / 2, cut.height / 2, (cut.width / 2) * COMPOSE.maskScale, 0, Math.PI * 2);
-    ctx.closePath();
-    ctx.fill();
-    ctx.restore();
+    // Máscara circular (opcional). Si usas MediaPipe, déjalo OFF.
+    if (COMPOSE.useCircleMask) {
+    
+    
+        // Máscara circular (poster actual ya lo trata como círculo)
+        ctx.save();
+        ctx.globalCompositeOperation = "destination-in";
+        ctx.beginPath();
+        ctx.arc(cut.width / 2, cut.height / 2, (cut.width / 2) * COMPOSE.maskScale, 0, Math.PI * 2);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+    }
 
     // guardamos mapping para mapear la guía de gafas a esta composición
     state.lastCrop = { sx, sy, sw: crop, sh: crop, out: cut.width };
 
     return cut;
 }
+
+
+function mapRectToHeadCrop(rect, crop) {
+    if (!rect || !crop || !Number.isFinite(crop.sx) || !Number.isFinite(crop.sw) || !Number.isFinite(crop.out)) return null;
+    const s = crop.out / crop.sw;
+    const x = (rect.x - crop.sx) * s;
+    const y = (rect.y - crop.sy) * s;
+    const w = rect.w * s;
+    const h = rect.h * s;
+    const cx = (rect.cx - crop.sx) * s;
+    const cy = (rect.cy - crop.sy) * s;
+    if (![x,y,w,h,cx,cy].every(Number.isFinite)) return null;
+    return { x, y, w, h, cx, cy };
+}
+
+function guideCircleForHeadCanvas(headCanvas) {
+    // Guía “virtual” en el headCanvas: centro + radio ~ tamaño del recorte
+    const r = Math.min(headCanvas.width, headCanvas.height) * 0.48;
+    return { cx: headCanvas.width * 0.5, cy: headCanvas.height * 0.5, r };
+}
+
 
 function drawGlassesOnHead(headCanvas, caretaId, glassesImg, guideInHead = null) {
     if (!headCanvas || !glassesImg) return;
@@ -1648,37 +1738,34 @@ async function capturePhoto() {
         throw new Error("NO_CAMERA_FRAME");
     }
 
-    // P0: Pantalla 3 = “freeze frame” de Pantalla 2 (sin máscara circular, sin re-escala rara)
-    const out = document.createElement("canvas");
-    out.width = preview.width;
-    out.height = preview.height;
+    // P0: Pantalla 3 = “head-only” (grande, centrado) usando la guía de la Pantalla 2.
+// Objetivo: que #photoPreview sea SOLO la cabeza (sin “lienzo” gigante transparente).
+const headCanvas = extractHeadCanvas(preview);
 
-    const octx = out.getContext("2d", { alpha: true });
-    octx.clearRect(0, 0, out.width, out.height);
-    octx.drawImage(preview, 0, 0);
-
-    // ✅ Head-only (pelo + cara + orejas): aplicamos máscara sobre el freeze-frame.
-    // Importante: lo hacemos ANTES de pintar las gafas virtuales.
-    if (HEAD_SEG.enabled) {
-        try {
-            const guide = getGuideCirclePx();
-            const masked = await applyHeadSegmentationToCanvas(out, guide);
-            if (!masked) console.warn("[HEAD_SEG] Máscara no aplicada (sin resultados)." );
-        } catch (e) {
-            console.warn("[HEAD_SEG] Falló el recorte de cabeza; seguimos con el frame entero.", e);
-        }
+// ✅ Segmentación (pelo/cara/orejas) sobre el headCanvas.
+// Nota: el modelo es 256×256 internamente, pero lo escalamos a un headCanvas grande para que la salida sea nítida.
+if (HEAD_SEG.enabled) {
+    try {
+        const headGuide = guideCircleForHeadCanvas(headCanvas);
+        const ok = await applyHeadSegmentationToCanvas(headCanvas, headGuide);
+        if (!ok) console.warn("[HEAD_SEG] Máscara no aplicada (sin resultados).");
+    } catch (e) {
+        console.warn("[HEAD_SEG] Falló la máscara; seguimos con el recorte.", e);
     }
+}
 
-    const careta = state.selectedCareta || CARETAS[0];
-    const glassesImg = await getGlassesImage(careta);
+const careta = state.selectedCareta || CARETAS[0];
+const glassesImg = await getGlassesImage(careta);
 
-    // Guía DOM → coordenadas canvas: lo que ves alineado es lo que se imprime.
-    const gpx = getGlassesGuidePx();
-    if (glassesImg && gpx) {
-        drawGlassesOnHead(out, careta.id, glassesImg, gpx);
-    }
+// Guía DOM → preview px → head px (lo que alineas es lo que exportas).
+const gpx = getGlassesGuidePx();
+const guideInHead = (gpx && state.lastCrop) ? mapRectToHeadCrop(gpx, state.lastCrop) : null;
 
-    state.photoDataUrl = out.toDataURL("image/png");
+if (glassesImg) {
+    drawGlassesOnHead(headCanvas, careta.id, glassesImg, guideInHead);
+}
+
+state.photoDataUrl = headCanvas.toDataURL("image/png");
     setView("send");
 }
 

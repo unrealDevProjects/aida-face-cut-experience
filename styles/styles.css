@@ -2,6 +2,9 @@
    1) Básicos
 ========================= */
 :root {
+    /* SEND: Ajuste vertical de la cabeza (Pantalla 3) */
+    --send-head-top: 260px; /* + = más abajo */
+
     --w: 1080;
     --h: 1920;
 
@@ -409,15 +412,15 @@ input {
 }
 
 .poster-head {
-    width: 70%;
-    max-width: 820px;
+    width: 88%;
+    max-width: 980px;
     display: grid;
     place-items: center;
 }
 
 .poster-head img {
-    width: 70%;
-    max-width: 520px;
+    width: 92%;
+    max-width: 780px;
     height: auto;
     filter: drop-shadow(0 18px 28px rgb(0 0 0 / .32));
     clip-path: ellipse(46% 50% at 50% 46%);
@@ -922,25 +925,6 @@ input {
    La foto final es el freeze-frame de Pantalla 2, a pantalla completa.
 ========================= */
 
-.view[data-view="send"] .poster-head{
-  position:absolute;
-  top: 240px;
-  left: 100%;
-  transform: translateX(-50%);
-  width: 1100px;
-  height: auto;
-  z-index:1;
-  scale: 2.0;
-}
-
-.view[data-view="send"] .poster-head img{
-  width: 100%;
-  height: auto;
-  border-radius:0;
-  object-fit: contain;
-  filter: drop-shadow(0 20px 40px rgb(0 0 0 / .35));
-}
-
 .view[data-view="send"] .poster-cines,
 .view[data-view="send"] .poster-logo,
 .view[data-view="send"] .poster-paco,
@@ -983,3 +967,28 @@ input {
   stroke-dasharray: 339.292;
   stroke-dashoffset: 339.292;
 }
+
+
+/* =========================
+   SEND FIX (P0): cara centrada y tamaño controlado (override final)
+   - Evita el “mega zoom” y el desplazamiento accidental
+========================= */
+.view[data-view="send"] .poster-head{
+  position:absolute;
+  top: var(--send-head-top);
+left: 50%;
+  transform: translateX(-50%);
+  width: 860px;
+  max-width: none;
+  z-index: 1;
+}
+.view[data-view="send"] .poster-head img{
+  width: 860px;
+  max-width: none;
+  height: auto;
+  border-radius: 0;
+object-fit: cover;
+  image-rendering: auto;
+  filter: drop-shadow(0 20px 34px rgb(0 0 0 / .28));
+}
+

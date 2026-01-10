@@ -14,3 +14,8 @@
 ## Recomendación rápida (kiosko 1080p)
 - Si tu monitor es 1080×1920: deja `CAM.maxW=1080`, `CAM.maxH=1920`, `dprCap=2` (ya no emborrona).
 - Si quieres estabilidad máxima CPU: `dprCap=1`.
+
+## Captura HQ (nuevo)
+- Se desactiva CHROMA en la app (Broadcast ya entrega el fondo rojo).
+- Captura/export a 2160×3840 (configurable en CAPTURE_HQ) para mejorar nitidez del póster.
+- Preview sigue fluido; el export es el que sube de calidad.
