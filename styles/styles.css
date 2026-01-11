@@ -1,9 +1,24 @@
 /* =========================
    1) Básicos
 ========================= */
+
+/* Fuente ITC Avant Garde Gothic */
+@font-face {
+    font-family: 'ITC Avant Garde Gothic';
+    src: url('../assets/ITC Avant Garde Gothic Std Bold.otf') format('opentype');
+    font-weight: 700;
+    font-style: normal;
+    font-display: swap;
+}
+
 :root {
     /* SEND: Ajuste vertical de la cabeza (Pantalla 3) */
     --send-head-top: 260px; /* + = más abajo */
+
+    /* SEND: Ajustes manuales (Pantalla 3) */
+    --send-x: 0px;
+    --send-y: 0px;
+    --send-s: 1;
 
     --w: 1080;
     --h: 1920;
@@ -288,17 +303,38 @@ input {
     display: grid;
     place-items: center;
     margin-top: 0;
-    overflow: hidden;
+    overflow: visible;
+    padding: 0; /* ✅ NO tocamos el tamaño del preview */
+    isolation: isolate;
 }
+
+/* Marco visual SIN afectar el tamaño del canvas (no cambia la escala) */
+.camera-shell::after{
+    content:"";
+    position:absolute;
+    inset:0;
+    border:6px solid #fff;
+    border-radius:28px;
+    box-shadow:
+        0 0 0 2px rgba(0,0,0,.10),
+        0 15px 40px rgba(0,0,0,.40),
+        inset 0 0 30px rgba(0,0,0,.08);
+    pointer-events:none;
+    z-index:5;
+}
+
 
 #cameraCanvas {
     width: 100%;
     height: 100%;
     background: transparent;
-    border-radius: 24px;
-    box-shadow: var(--shadow);
+    border: 0;          /* ✅ el marco lo pinta ::after */
+    border-radius: 28px;
+    box-shadow: none;   /* ✅ el marco lo pinta ::after */
     transform: scaleX(-1);
+    display: block;
 }
+
 
 #camera {
     position: absolute;
@@ -314,8 +350,39 @@ input {
     top: 36px;
     left: 50%;
     transform: translateX(-50%);
-    width: 78%;
-    max-width: 840px;
+    width: 90%;
+    max-width: 920px;
+    
+    /* Texto directo sobre el fondo */
+    font-family: 'ITC Avant Garde Gothic', 'Avant Garde Gothic', sans-serif;
+    font-weight: 700;
+    font-size: 34px;
+    color: #fff;
+    text-align: center;
+    line-height: 1.3;
+    
+    /* Sombra para legibilidad */
+    text-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    
+    /* Anti-aliasing */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    
+    margin: 0;
+}
+
+.capture-logo {
+    position: absolute;
+    bottom: 150px;
+    left: 60%;
+    transform: translateX(-50%);
+    width: 320px;
+    max-width: 35%;
+    height: auto;
+    opacity: 0.95;
+    filter: drop-shadow(0 8px 18px rgba(0, 0, 0, 0.3));
+    pointer-events: none;
+    scale: 1.5;
 }
 
 .capture-circle {
@@ -374,6 +441,7 @@ input {
     cursor: pointer;
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none;
     user-select: none;
 }
 
@@ -422,11 +490,18 @@ input {
     width: 92%;
     max-width: 780px;
     height: auto;
-    filter: drop-shadow(0 18px 28px rgb(0 0 0 / .32));
-    clip-path: ellipse(46% 50% at 50% 46%);
-    -webkit-mask-image: radial-gradient(ellipse 52% 58% at 50% 42%, #000 70%, transparent 100%);
-    mask-image: radial-gradient(ellipse 52% 58% at 50% 42%, #000 70%, transparent 100%);
-    object-fit: cover;
+
+    /* ✅ NO re-rasterizamos en Pantalla 3:
+       El óvalo + feather vienen "horneados" desde el canvas de captura. */
+    
+    /* ✅ Sombra elegante para dar profundidad */
+    filter: drop-shadow(0 15px 35px rgba(0, 0, 0, 0.5));
+    
+    clip-path: none;
+    -webkit-mask-image: none;
+    mask-image: none;
+
+    object-fit: contain;
 }
 
 .poster-paco {
@@ -446,46 +521,6 @@ input {
     transition: filter 0.6s ease;
     filter: blur(14px);
     opacity: 1;
-}
-
-/* Modal */
-.modal {
-    position: fixed;
-    inset: 0;
-    display: flex;
-    align-items: flex-start;
-    justify-content: center;
-    padding-top: 80px;
-    z-index: 999;
-}
-
-.modal.is-hidden {
-    display: none;
-}
-
-.modal-backdrop {
-    position: absolute;
-    inset: 0;
-    background: rgb(0 0 0 / .55);
-}
-
-.modal-content {
-    position: relative;
-    width: min(980px, 92vw);
-    height: min(1480px, 82vh);
-    background: #111;
-    border-radius: 22px;
-    overflow: hidden;
-    box-shadow: 0 30px 80px rgb(0 0 0 / .55);
-}
-
-.modal-content iframe {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    border: 0;
-    background: #fff;
 }
 
 /* =========================
@@ -525,6 +560,18 @@ input {
     /* Tamaño de la guía de cara (px) */
     --cap-circle-w: 560px;
 
+    /* ✅ Cámara (preview): mueve/escala el frame del vídeo (por defecto 1:1) */
+    --cam-x: 0px;   /* +derecha / -izquierda */
+    --cam-y: 0px;   /* +abajo   / -arriba */
+    --cam-s: 1;     /* 1 = sin zoom (no reescalado) */
+
+    /* Marco del preview (coords se actualizan desde JS con el área real dibujada) */
+    --cam-frame-x: 0px;
+    --cam-frame-y: 0px;
+    --cam-frame-w: 0px;
+    --cam-frame-h: 0px;
+    --cam-frame-r: 28px;
+
     /* ✅ GAFAS: el JS las alinea con el círculo.
        Estos 3 valores son tu “volante” para afinar in situ. */
     --cap-glasses-nudge-x: 0px;  /* +derecha / -izquierda */
@@ -552,18 +599,54 @@ input {
     max-width: none;
     max-height: none;
     margin: 0;
-    overflow: hidden;
+    overflow: visible; /* ✅ para que la sombra se vea */
 }
+
 
 .view[data-view="capture"] #cameraCanvas {
     position: absolute;
-    inset: 0;
+    inset: 0;     /* ✅ sin shrink -> misma escala que el layout base */
     width: 100%;
     height: 100%;
-    border-radius: 0;
     background: transparent;
+
+    /* Importante: el marco del preview NO va en el canvas (queda tapado por el frame global).
+       El marco se dibuja con .camera-shell::after usando coords reales del vídeo. */
+    border: 0;
+    border-radius: 0;
     box-shadow: none;
 }
+
+
+/* =========================
+   CAPTURE: Marco premium del preview (solo visual)
+   - Esquinas redondeadas + borde blanco + “presencia” (shadow)
+   - Se posiciona usando coords reales del vídeo dibujado (NO CSS scale)
+========================= */
+.view[data-view="capture"] .camera-shell{
+    /* el marco necesita salirse un poco para el shadow */
+    overflow: visible;
+}
+.view[data-view="capture"] .camera-shell::after{
+    content: "";
+    position: absolute;
+    left: var(--cam-frame-x);
+    top: var(--cam-frame-y);
+    width: var(--cam-frame-w);
+    height: var(--cam-frame-h);
+    border-radius: var(--cam-frame-r);
+    pointer-events: none;
+    z-index: 8;
+
+    /* borde blanco + línea oscura fina + sombra exterior + sombra interior suave */
+    box-shadow:
+      0 0 0 6px rgb(255 255 255 / .92),
+      0 0 0 8px rgb(0 0 0 / .12),
+      0 24px 70px rgb(0 0 0 / .35),
+      inset 0 0 26px rgb(0 0 0 / .12);
+}
+
+
 
 .view[data-view="capture"] .capture-text {
     top: 92px;
@@ -625,6 +708,7 @@ input {
     letter-spacing: -0.02em;
     color: #fff;
     text-shadow: 0 10px 18px rgb(0 0 0 / .22);
+    -webkit-user-select: none;
     user-select: none;
     transform: none;
 }
@@ -756,83 +840,12 @@ input {
     opacity: 1;
 }
 
-/* Modal centrado SIEMPRE */
-.modal {
-    position: fixed;
-    inset: 0;
-    display: grid;
-    place-items: center;
-    padding: clamp(12px, 3vh, 80px) clamp(12px, 3vw, 64px);
-    z-index: 999;
-}
-
-/* Backdrop suave (no bloquea clicks del iframe) */
-.modal-backdrop {
-    position: absolute;
-    inset: 0;
-    background: rgb(0 0 0 / .35);
-    pointer-events: none;
-}
-
-/* La burbuja se limita al tamaño real del stage en pantalla */
-.modal-content {
-    position: relative;
-    width: min(980px, calc(var(--stage-px-w) - 120px), 92vw);
-    height: min(1480px, calc(var(--stage-px-h) - 180px), 86vh);
-    border-radius: 22px;
-    overflow: hidden;
-    background: #111;
-    box-shadow: 0 30px 80px rgb(0 0 0 / .55);
-}
-
-/* Botón cerrar siempre clicable */
-.modal-close {
-    position: absolute;
-    top: 20px;
-    right: 20px;
-    z-index: 3;
-    width: 80px;
-    height: 80px;
-    border-radius: 50%;
-    border: 4px solid #fff;
-    background: #e50914;
-    color: #fff;
-    font-size: 38px;
-    font-weight: 700;
-    line-height: 1;
-    cursor: pointer;
-    box-shadow: 0 8px 28px rgb(0 0 0 / .6);
-    transition: transform .15s ease, background .15s ease, box-shadow .15s ease;
-    display: grid;
-    place-items: center;
-}
-
-.modal-close:hover {
-    transform: scale(1.15);
-    background: #ff1a1a;
-    box-shadow: 0 12px 36px rgb(0 0 0 / .7);
-}
-
-.modal-close:active {
-    transform: scale(0.92);
-}
-
-/* Iframe al 100% */
-.modal-content iframe {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    border: 0;
-    background: #fff;
-}
-
 /* mata el blur antiguo si lo sigues aplicando */
 .blur-out {
     filter: none !important;
 }
 
-/* QR overlay (visible debajo del iframe y también tras cerrarlo) */
+/* QR overlay (pantalla oscura con QR centrado) */
 .qr-overlay{
     /* Centrado REAL dentro del stage (no del viewport) */
     position: fixed;
@@ -841,8 +854,11 @@ input {
     width: var(--stage-px-w);
     height: var(--stage-px-h);
 
-    display: grid;
-    place-items: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 60px;
 
     z-index: 900; /* bajo el modal (z=999) pero sobre el dim */
     pointer-events: none;
@@ -872,6 +888,44 @@ input {
     display: none;
 }
 
+/* Botón "Reiniciar" debajo del QR */
+.btn-reiniciar {
+    /* Idéntico al botón "Continuar" original */
+    background: linear-gradient(180deg, #FF6347 0%, #E8441D 100%);
+    border: 5px solid #fff; /* ✅ Borde blanco como el original */
+    border-radius: 70px;
+    padding: 24px 86px;
+    
+    font-family: 'ITC Avant Garde Gothic', 'Avant Garde Gothic', sans-serif;
+    font-weight: 700;
+    font-size: 52px;
+    color: #fff;
+    text-transform: none; /* ✅ Sin transformación, solo primera mayúscula */
+    letter-spacing: 0.02em;
+    
+    box-shadow: 0 14px 32px rgba(0, 0, 0, 0.35);
+    cursor: pointer;
+    pointer-events: auto;
+    
+    transition: transform .18s ease, box-shadow .18s ease, filter .18s ease;
+    
+    /* Anti-aliasing para mejor renderizado del texto */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+.btn-reiniciar:hover {
+    transform: scale(1.06);
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+    filter: brightness(1.08);
+}
+
+.btn-reiniciar:active {
+    transform: scale(0.96);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+    filter: brightness(0.95);
+}
+
 /* =========================
    PATCH: kiosk feedback / anti-spam / cine (add-only)
    No afecta a tu UI salvo cuando hay estados (loading/error/countdown).
@@ -879,7 +933,7 @@ input {
 
 .camera-status{
   position:absolute;
-  top: 140px;
+  top: 220px; /* ✅ Bajado de 140px a 220px */
   left: 50%;
   transform: translateX(-50%);
   z-index: 40;
@@ -891,6 +945,7 @@ input {
   font-size: 22px;
   text-align:center;
   box-shadow: var(--soft);
+  -webkit-backdrop-filter: blur(6px);
   backdrop-filter: blur(6px);
   pointer-events: none;
 }
@@ -970,25 +1025,41 @@ input {
 
 
 /* =========================
-   SEND FIX (P0): cara centrada y tamaño controlado (override final)
-   - Evita el “mega zoom” y el desplazamiento accidental
+   SEND: Recorte centrado + sin reescalado (Pantalla 3)
+   - La imagen ya viene con óvalo + feather “horneado” desde el canvas.
+   - Aquí solo centramos el conjunto, sin filtros ni masks CSS.
 ========================= */
+
 .view[data-view="send"] .poster-head{
-  position:absolute;
-  top: var(--send-head-top);
-left: 50%;
-  transform: translateX(-50%);
-  width: 860px;
-  max-width: none;
+  position: absolute;
+  inset: 0;
+  width: calc(var(--w) * 1px);
+  height: calc(var(--h) * 1px);
+  display: grid;
+  place-items: center;
   z-index: 1;
+  transform: none;
 }
+
 .view[data-view="send"] .poster-head img{
-  width: 860px;
-  max-width: none;
+  width: auto;
   height: auto;
-  border-radius: 0;
-object-fit: cover;
-  image-rendering: auto;
+  max-width: none;
+  max-height: none;
+  object-fit: none;
+  object-position: 50% 50%;
+
+  /* Ajuste manual desde consola (KIOSK_TUNE) */
+  transform: translate(var(--send-x), var(--send-y)) scale(var(--send-s));
+  transform-origin: 50% 50%;
+
+  /* ✅ La foto YA viene recortada con alpha (óvalo+feather). Sombra sin rerender raro */
   filter: drop-shadow(0 20px 34px rgb(0 0 0 / .28));
+
+  border-radius: 0;
+  clip-path: none;
+  -webkit-mask-image: none;
+  mask-image: none;
 }
+
 

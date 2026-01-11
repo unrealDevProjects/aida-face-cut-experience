@@ -1,18 +1,23 @@
 /* Kiosk SPA — 1 HTML, 3 views (Home / Capture / Send) */
 
+// Build stamp (para evitar “estoy editando el archivo equivocado”)
+const BUILD_ID = "KIOSK_noScale_v2";
+console.info("[KIOSK] build:", BUILD_ID);
+
 const APP = {
     baseW: 1080,
     baseH: 1920,
     idleMs: 30_000,
     autoAdvanceMs: 220,
-    apiEndpoint: "",
+    apiEndpoint: "http://localhost:8001",
 };
 
 // Render / calidad
 const CAM = {
     maxW: 2160,
     maxH: 3840,
-    dprCap: 2, // 1 = estable en kiosko; 2 = más nítido (más CPU)
+    dprCap: 1,        // 1 = estable; 2 = más nítido (más CPU)
+    forceDpr: null    // ✅ si quieres forzar (ej: 2). null = usa devicePixelRatio
 };
 
 // UX / “cine” (no cambia tu layout; solo estados y rendimiento)
@@ -74,337 +79,138 @@ const BG_RGB = [227, 50, 32];
 ========================= */
 
 const HEAD = {
-    size: 900,
+    size: 1400,
     preset: "normal", // "tight" | "normal" | "loose"
 };
 
 
 // Composición: “lo que ves es lo que sale” (la guía manda)
 const COMPOSE = {
-    pad: 1.18,        // cuánto aire alrededor de la guía de cara (1.10–1.45)
-    maskScale: 1.0,  
-    useCircleMask: false, // ✅ OFF: ya recortamos con MediaPipe (evita “círculo” alrededor)
-// 1 = círculo perfecto; <1 come un poco el borde
-    useGlassesGuide: true, // si existe #glassesGuide, se usa para posicionar las gafas
+    pad: 1.18,          // preview/guías (Pantalla 2) — NO tocar en venue salvo necesidad
+
+    // ✅ SOLO export (Pantalla 3): controla “zoom” del recorte final.
+    // + = cara/gafas más pequeñas (más aire) ⇒ más nitidez percibida (menos upscale).
+    exportPad: 1.34,
+
+    // ✅ SOLO export: reduce tamaño de las gafas en Pantalla 3 (no toca tu guía)
+    glassesScale: 0.90,
+
+    maskScale: 1.0,     // (solo si activas useCircleMask)
+    useCircleMask: false,
+    useGlassesGuide: true // si existe #glassesGuide, se usa para posicionar las gafas
 };
 
 /* =========================
-   MediaPipe (head-only): pelo + cara + orejas (skin)
-   Objetivo: en Pantalla 3 te quedas SOLO con cabeza (sin cuerpo) sin usar máscara circular cutre.
-   Nota: ejecutamos el matting SOLO en el freeze-frame (capture), no en tiempo real.
+   Recorte por SILUETA (sin MediaPipe)
+   - Eliminamos completamente MediaPipe/256×256/segmentación.
+   - La máscara final se genera SOLO desde la guía de posicionamiento (Pantalla 2).
+   - Importante: la silueta NO debe “verse” en el PNG final.
+     Por eso NO usamos el PNG de la guía como máscara; usamos su rect (tamaño/posición)
+     y construimos una máscara geométrica (elipse rellena).
 ========================= */
 
-// Pin de versión para que NO te cambie el bundle/wasm por sorpresa en producción.
-// Si mañana Google rompe algo, tu kiosko sigue funcionando.
-const MP = {
-    version: "0.10.22-rc.20250304",
-    bundleUrl() {
-        return `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${this.version}/vision_bundle.mjs`;
-    },
-    wasmBase() {
-        return `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${this.version}/wasm`;
-    },
-};
-
-const HEAD_SEG = {
+const GUIDE_MASK = {
     enabled: true,
+    // Selector del elemento que define la guía en Pantalla 2 (solo usamos su rect)
+    selector: ".capture-circle",
 
-    // ✅ Recomendado: servir local para modo “offline”.
-    // Si no existe el archivo, verás un warning claro en consola.
-    modelAssetPath: "assets/models/selfie_multiclass_256x256.tflite",
+    // ✅ Feather real del borde (en px de canvas del recorte).
+    // 0 = borde duro, 8–16 = recomendado (según look).
+    featherPx: 8,  // ✅ Reducido de 14 a 8 (menos difuminado)
 
-    wasmPath: MP.wasmBase(),
-    delegate: "GPU", // "GPU" | "CPU"
-
-    // Mejor pelo/borde → confidence masks.
-    useConfidenceMasks: true,
-
-    // Gating geométrico: elimina hombros aunque el modelo tenga dudas.
-    ellipse: {
-        enabled: true,
-        rx: 1.05,
-        ry: 1.55,
-        yUp: 0.08,
-    },
-
-    // Suavizado del borde (en la máscara 256x256)
-    featherPx: 2,
-
-    // Halo rojo (Broadcast) en pelo: decontaminación contra BG_RGB usando el alpha de MediaPipe
-    haloFix: {
-        enabled: true,
-        strength: 0.92, // 0..1 (sube si aún ves rojo en pelo)
-        alphaMin: 8,    // solo toca el borde (alpha entre alphaMin y 254)
-    },
-
-
-    // Qué clases se quedan (labels dinámicos).
-    keep: {
-        hair: true,
-        face: true,
-        skin: true,          // piel/orejas (pero NO body-skin)
-        accessories: false,  // no te mantiene gafas reales; las virtuales las pintamos después
-    },
+    // ✅ Tamaño/forma del óvalo (ajustes finos)
+    inset: 0.94,  // ✅ Reducido de 1.00 a 0.94 (óvalo MÁS GRANDE, recorta menos)
+    grow: 1.40,   // ✅ Aumentado de 1.18 a 1.22 (expande aún más el óvalo)
+    yShift: 0     // px (por si quieres subir/bajar la máscara en el póster)
 };
 
-let mpSeg = {
-    ready: false,
-    imageSegmenter: null,
-    labels: [],
-    keepIdx: [],
-    FilesetResolver: null,
-    ImageSegmenter: null,
-};
+function applyGuideMaskToHeadCanvas(headCanvas, previewCanvas) {
+    if (!GUIDE_MASK.enabled) return false;
+    if (!headCanvas || !previewCanvas) return false;
 
-// Reusable mask canvas (evita allocs cada captura)
-const _maskCanvas = document.createElement("canvas");
-const _maskCtx = _maskCanvas.getContext("2d", { willReadFrequently: true });
+    const elGuide = document.querySelector(GUIDE_MASK.selector);
+    if (!elGuide) return false;
 
-const clamp01 = (v) => (v < 0 ? 0 : (v > 1 ? 1 : v));
+    // Rect de la guía medido en px de canvas (preview)
+    const rectPx = getElemRectPx(elGuide, previewCanvas);
+    if (!rectPx || !state.lastCrop) return false;
 
-// Box blur barato (Float32 alpha). Suficiente para feather.
-function boxBlurFloat(src, w, h, r = 2) {
-    if (!r || r < 1) return src;
-    const tmp = new Float32Array(src.length);
-    const dst = new Float32Array(src.length);
-    const win = r * 2 + 1;
+    // Rect de guía remapeado al headCanvas (crop exportado)
+    const rectInHead = mapRectToHeadCrop(rectPx, state.lastCrop);
+    if (!rectInHead) return false;
 
-    // horizontal
-    for (let y = 0; y < h; y++) {
-        let sum = 0;
-        const row = y * w;
-        for (let x = -r; x <= r; x++) {
-            const xx = Math.min(w - 1, Math.max(0, x));
-            sum += src[row + xx];
-        }
-        for (let x = 0; x < w; x++) {
-            tmp[row + x] = sum / win;
-            const xOut = x - r;
-            const xIn = x + r + 1;
-            if (xOut >= 0) sum -= src[row + xOut];
-            if (xIn < w) sum += src[row + xIn];
-            else sum += src[row + (w - 1)];
-        }
+    const w = headCanvas.width;
+    const h = headCanvas.height;
+
+    // Centro + radios “base” (oval)
+    let cx = rectInHead.cx;
+    let cy = rectInHead.cy + (GUIDE_MASK.yShift || 0);
+
+    const inset = (GUIDE_MASK.inset || 1);
+    const grow = (GUIDE_MASK.grow || 1);
+
+    let rx = (rectInHead.w * 0.5) * inset * grow;
+    let ry = (rectInHead.h * 0.5) * inset * grow;
+
+    // ✅ Anti-clipping: si la elipse se sale del canvas, se vería “corte recto” abajo/arriba.
+    // Dejamos margen extra para que el blur (feather) no se recorte.
+    const feather = Math.max(0, GUIDE_MASK.featherPx | 0);
+    const margin = feather * 2 + 4;
+
+    const maxRx = Math.max(2, Math.min(cx - margin, (w - cx) - margin));
+    const maxRy = Math.max(2, Math.min(cy - margin, (h - cy) - margin));
+
+    const sx = maxRx / Math.max(1e-6, rx);
+    const sy = maxRy / Math.max(1e-6, ry);
+    const s = Math.min(1, sx, sy);
+
+    rx *= s;
+    ry *= s;
+
+    // 1) Creamos máscara en un canvas aparte (solo alpha)
+    const mask = document.createElement("canvas");
+    mask.width = w;
+    mask.height = h;
+    const mctx = mask.getContext("2d", { alpha: true });
+
+    mctx.clearRect(0, 0, w, h);
+    mctx.imageSmoothingEnabled = true;
+    mctx.imageSmoothingQuality = "high";
+
+    // Elipse sólida
+    mctx.fillStyle = "#000";
+    mctx.beginPath();
+    mctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+    mctx.closePath();
+    mctx.fill();
+
+    // 2) Feather: blur SOLO la máscara (no la foto)
+    let maskToUse = mask;
+    if (feather > 0) {
+        const tmp = document.createElement("canvas");
+        tmp.width = w;
+        tmp.height = h;
+        const tctx = tmp.getContext("2d", { alpha: true });
+
+        tctx.clearRect(0, 0, w, h);
+        tctx.filter = `blur(${feather}px)`;
+        tctx.drawImage(mask, 0, 0);
+        tctx.filter = "none";
+
+        maskToUse = tmp;
     }
 
-    // vertical
-    for (let x = 0; x < w; x++) {
-        let sum = 0;
-        for (let y = -r; y <= r; y++) {
-            const yy = Math.min(h - 1, Math.max(0, y));
-            sum += tmp[yy * w + x];
-        }
-        for (let y = 0; y < h; y++) {
-            dst[y * w + x] = sum / win;
-            const yOut = y - r;
-            const yIn = y + r + 1;
-            if (yOut >= 0) sum -= tmp[yOut * w + x];
-            if (yIn < h) sum += tmp[yIn * w + x];
-            else sum += tmp[(h - 1) * w + x];
-        }
-    }
-    return dst;
-}
-
-function resolveKeepIndices(labels) {
-    const keepIdx = [];
-    const L = (labels || []).map((s) => String(s || "").toLowerCase());
-
-    const wantHair = !!HEAD_SEG.keep.hair;
-    const wantFace = !!HEAD_SEG.keep.face;
-    const wantSkin = !!HEAD_SEG.keep.skin;
-    const wantAcc = !!HEAD_SEG.keep.accessories;
-
-    for (let i = 0; i < L.length; i++) {
-        const name = L[i];
-        const isHair = wantHair && name.includes("hair");
-        const isFace = wantFace && (name.includes("face") || name.includes("facial"));
-        // Mantén skin excepto “body-skin”
-        const isSkin = wantSkin && name.includes("skin") && !name.includes("body");
-        const isAcc = wantAcc && name.includes("accessor");
-        if (isHair || isFace || isSkin || isAcc) keepIdx.push(i);
-    }
-
-    // fallback (selfie_multiclass típico)
-    // 0 background | 1 hair | 2 body-skin | 3 face-skin | 4 clothes | 5 accessories
-    if (!keepIdx.length) {
-        if (HEAD_SEG.keep.hair) keepIdx.push(1);
-        if (HEAD_SEG.keep.face || HEAD_SEG.keep.skin) keepIdx.push(3);
-        if (HEAD_SEG.keep.accessories) keepIdx.push(5);
-    }
-    return keepIdx;
-}
-
-async function initHeadSegmenter() {
-    if (!HEAD_SEG.enabled) return false;
-    if (mpSeg.ready && mpSeg.imageSegmenter) return true;
-
-    try {
-        // Import ESM desde CDN (por eso index.js va como type="module")
-        if (!mpSeg.FilesetResolver || !mpSeg.ImageSegmenter) {
-            const mod = await import(MP.bundleUrl());
-            mpSeg.FilesetResolver = mod.FilesetResolver;
-            mpSeg.ImageSegmenter = mod.ImageSegmenter;
-        }
-
-        const vision = await mpSeg.FilesetResolver.forVisionTasks(HEAD_SEG.wasmPath);
-
-        mpSeg.imageSegmenter = await mpSeg.ImageSegmenter.createFromOptions(vision, {
-            baseOptions: {
-                modelAssetPath: HEAD_SEG.modelAssetPath,
-                delegate: HEAD_SEG.delegate,
-            },
-            runningMode: "IMAGE",
-            outputCategoryMask: !HEAD_SEG.useConfidenceMasks,
-            outputConfidenceMasks: !!HEAD_SEG.useConfidenceMasks,
-        });
-
-        mpSeg.labels = mpSeg.imageSegmenter.getLabels?.() || [];
-        mpSeg.keepIdx = resolveKeepIndices(mpSeg.labels);
-        mpSeg.ready = true;
-        console.log("[HEAD_SEG] Ready", { labels: mpSeg.labels, keepIdx: mpSeg.keepIdx });
-        return true;
-    } catch (e) {
-        console.warn("[HEAD_SEG] No se pudo inicializar (seguimos sin recorte de cabeza)", e);
-        mpSeg.ready = false;
-        mpSeg.imageSegmenter = null;
-        return false;
-    }
-}
-
-function buildAlphaMaskFromResult(result, keepIdx) {
-    // Confidence masks (float 0..1)
-    if (result?.confidenceMasks?.length) {
-        const masks = result.confidenceMasks;
-        const w = masks[0]?.width ?? masks[0]?.getWidth?.();
-        const h = masks[0]?.height ?? masks[0]?.getHeight?.();
-        if (!w || !h) return null;
-
-        const alpha = new Float32Array(w * h);
-        for (const k of keepIdx) {
-            const m = masks[k];
-            if (!m) continue;
-            const arr = m.getAsFloat32Array?.();
-            if (!arr || arr.length !== alpha.length) continue;
-            for (let i = 0; i < alpha.length; i++) {
-                const v = arr[i];
-                if (v > alpha[i]) alpha[i] = v;
-            }
-        }
-
-        // cleanup
-        masks.forEach((m) => m?.close?.());
-        return { w, h, alpha };
-    }
-
-    // Category mask (uint8 label per pixel)
-    if (result?.categoryMask) {
-        const m = result.categoryMask;
-        const w = m.width ?? m.getWidth?.();
-        const h = m.height ?? m.getHeight?.();
-        const arr = m.getAsUint8Array?.();
-        if (!w || !h || !arr) return null;
-
-        const keepSet = new Set(keepIdx);
-        const alpha = new Float32Array(w * h);
-        for (let i = 0; i < alpha.length; i++) {
-            alpha[i] = keepSet.has(arr[i]) ? 1 : 0;
-        }
-
-        m.close?.();
-        return { w, h, alpha };
-    }
-
-    return null;
-}
-
-function applyEllipseGate(alpha, mw, mh, guide, outW, outH) {
-    if (!HEAD_SEG.ellipse.enabled || !guide) return;
-    const cx = (guide.cx / outW) * mw;
-    const cy = ((guide.cy - guide.r * HEAD_SEG.ellipse.yUp) / outH) * mh;
-    const rx = (guide.r * HEAD_SEG.ellipse.rx / outW) * mw;
-    const ry = (guide.r * HEAD_SEG.ellipse.ry / outH) * mh;
-
-    const invRx2 = 1 / Math.max(1e-6, rx * rx);
-    const invRy2 = 1 / Math.max(1e-6, ry * ry);
-
-    for (let y = 0; y < mh; y++) {
-        for (let x = 0; x < mw; x++) {
-            const dx = x - cx;
-            const dy = y - cy;
-            if ((dx * dx) * invRx2 + (dy * dy) * invRy2 > 1) {
-                alpha[y * mw + x] = 0;
-            }
-        }
-    }
-}
-
-function alphaToMaskCanvas(alpha, mw, mh) {
-    _maskCanvas.width = mw;
-    _maskCanvas.height = mh;
-    const img = _maskCtx.createImageData(mw, mh);
-    const d = img.data;
-    for (let i = 0; i < alpha.length; i++) {
-        const a = Math.round(clamp01(alpha[i]) * 255);
-        const o = i * 4;
-        d[o] = 255;
-        d[o + 1] = 255;
-        d[o + 2] = 255;
-        d[o + 3] = a;
-    }
-    _maskCtx.putImageData(img, 0, 0);
-    return _maskCanvas;
-}
-
-async function applyHeadSegmentationToCanvas(canvasEl, guideCirclePx) {
-    const ok = await initHeadSegmenter();
-    if (!ok || !mpSeg.imageSegmenter) return false;
-
-    const result = await mpSeg.imageSegmenter.segment(canvasEl);
-    const mask = buildAlphaMaskFromResult(result, mpSeg.keepIdx);
-    if (!mask) return false;
-
-    // gate + feather
-    applyEllipseGate(mask.alpha, mask.w, mask.h, guideCirclePx, canvasEl.width, canvasEl.height);
-    if (HEAD_SEG.featherPx > 1) {
-        mask.alpha = boxBlurFloat(mask.alpha, mask.w, mask.h, HEAD_SEG.featherPx);
-    }
-
-    const maskCanvas = alphaToMaskCanvas(mask.alpha, mask.w, mask.h);
-
-    const ctx = canvasEl.getContext("2d", { alpha: true });
+    // 3) Aplicamos la máscara al headCanvas
+    const ctx = headCanvas.getContext("2d", { alpha: true });
     ctx.save();
     ctx.globalCompositeOperation = "destination-in";
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
-    ctx.drawImage(maskCanvas, 0, 0, canvasEl.width, canvasEl.height);
+    ctx.drawImage(maskToUse, 0, 0);
     ctx.restore();
 
-    // =========================
-    // POST-HALO FIX (red decontam)
-    // Quita contaminación del fondo rojo en el borde (pelo) usando el alpha.
-    // =========================
-    if (HEAD_SEG.haloFix?.enabled) {
-        const img = ctx.getImageData(0, 0, canvasEl.width, canvasEl.height);
-        const d = img.data;
-        const bgR = BG_RGB[0], bgG = BG_RGB[1], bgB = BG_RGB[2];
-        const k = clamp01(HEAD_SEG.haloFix.strength ?? 0.92);
-        const aMin = Math.max(1, (HEAD_SEG.haloFix.alphaMin ?? 8) | 0);
-
-        for (let i = 0; i < d.length; i += 4) {
-            const a = d[i + 3];
-            if (a >= aMin && a < 255) {
-                const out = decontaminateAgainstBg(d[i], d[i + 1], d[i + 2], a, bgR, bgG, bgB, k);
-                d[i] = out[0]; d[i + 1] = out[1]; d[i + 2] = out[2];
-            }
-        }
-        cleanRgbWhenTransparent(d, bgR, bgG, bgB);
-        ctx.putImageData(img, 0, 0);
-    }
     return true;
 }
-
-
 const HEAD_PRESETS = {
     tight: { cropW: 2.10, cropH: 2.35, yUp: 1.08, maskY: 0.48, maskRX: 0.47, maskRY: 0.52 },
     normal: { cropW: 2.25, cropH: 2.55, yUp: 1.05, maskY: 0.48, maskRX: 0.47, maskRY: 0.55 },
@@ -514,9 +320,15 @@ function getCaptureTuneScope() {
     return document.querySelector('.view[data-view="capture"]') || document.documentElement;
 }
 
+function getSendTuneScope() {
+    return document.querySelector('.view[data-view="send"]') || document.documentElement;
+}
+
 function applyCaptureTune(tune = {}) {
-    const scope = getCaptureTuneScope();
-    if (!scope) return;
+    const capScope = getCaptureTuneScope();
+    const sendScope = getSendTuneScope();
+    const fallback = document.documentElement;
+    if (!capScope && !sendScope) return;
 
     const map = {
         capX: "--cap-x",
@@ -535,17 +347,62 @@ function applyCaptureTune(tune = {}) {
         glassesNudgeX: "--cap-glasses-nudge-x",
         glassesNudgeY: "--cap-glasses-nudge-y",
         glassesNudgeS: "--cap-glasses-nudge-s",
+
+        // Cámara (preview) — mover/escala sin tocar código (NO-SCALE por defecto: camS=1)
+        camX: "--cam-x",
+        camY: "--cam-y",
+        camS: "--cam-s",
+
+        // Marco del preview (solo visual)
+        camFrameR: "--cam-frame-r",
+
+
+        // ✅ Cámara (preview) — mover/zoom del “cuadro” sin tocar código
+        camX: "--cam-x",
+        camY: "--cam-y",
+        camS: "--cam-s",
+
+        // Aliases “humanos”
+        cameraX: "--cam-x",
+        cameraY: "--cam-y",
+        cameraS: "--cam-s",
+        camScale: "--cam-s",
+
+        // ✅ Pantalla 3 (Poster) — mover/escala del recorte final
+        sendX: "--send-x",
+        sendY: "--send-y",
+        sendS: "--send-s",
+
+        // Aliases
+        posterX: "--send-x",
+        posterY: "--send-y",
+        posterS: "--send-s",
+        headX: "--send-x",
+        headY: "--send-y",
+        headS: "--send-s",
     };
 
     for (const [k, cssVar] of Object.entries(map)) {
-        if (tune[k] === undefined || tune[k] === null) continue;
-        scope.style.setProperty(cssVar, String(tune[k]));
+        if (tune[k] === undefined) continue;
+
+        const target =
+            cssVar.startsWith("--send-")
+                ? (sendScope || capScope || fallback)
+                : (capScope || fallback);
+
+        if (tune[k] === null) {
+            target.style.removeProperty(cssVar);
+        } else {
+            target.style.setProperty(cssVar, String(tune[k]));
+        }
     }
 
     // Resync inmediato (si mueves variables “en caliente” quieres feedback ya)
     requestAnimationFrame(() => {
-        syncGlassesGuideToCircle();
-        positionProgressRing();
+        if (capScope) {
+            syncGlassesGuideToCircle();
+            positionProgressRing();
+        }
     });
 }
 
@@ -604,6 +461,26 @@ function exposeTuneApi() {
             applyCaptureTune(next);
             return next;
         },
+        // Helpers “rápidos” para la cámara (preview)
+        cam(patch = {}) {
+            const out = {};
+            if (patch.x !== undefined) out.camX = (typeof patch.x === "number") ? `${patch.x}px` : String(patch.x);
+            if (patch.y !== undefined) out.camY = (typeof patch.y === "number") ? `${patch.y}px` : String(patch.y);
+            if (patch.s !== undefined) out.camS = (typeof patch.s === "number") ? patch.s : parseFloat(patch.s);
+            if (patch.r !== undefined) out.camFrameR = (typeof patch.r === "number") ? `${patch.r}px` : String(patch.r);
+            return this.set(out);
+        },
+        camNudge(dx = 0, dy = 0, ds = 0) {
+            const cur = this.get();
+            const px = (v) => (v == null) ? 0 : parseFloat(String(v)) || 0;
+            const next = {
+                camX: `${px(cur.camX) + dx}px`,
+                camY: `${px(cur.camY) + dy}px`,
+                camS: Math.max(0.1, (parseFloat(cur.camS) || 1) + ds),
+            };
+            return this.set(next);
+        },
+
         reset() {
             try { localStorage.removeItem(CAPTURE_TUNE.storageKey); } catch { }
 
@@ -614,12 +491,62 @@ function exposeTuneApi() {
                     "--cap-x", "--cap-y", "--cap-circle-w",
                     "--cap-counter-x", "--cap-counter-y", "--cap-counter-w",
                     "--cap-glasses-nudge-x", "--cap-glasses-nudge-y", "--cap-glasses-nudge-s",
+                    "--cam-x", "--cam-y", "--cam-s",
+                    "--cam-frame-r",
                 ].forEach((v) => scope.style.removeProperty(v));
+            }
+
+            const sendScope = getSendTuneScope();
+            if (sendScope) {
+                ["--send-x", "--send-y", "--send-s"].forEach((v) => sendScope.style.removeProperty(v));
             }
 
             requestAnimationFrame(() => syncGlassesGuideToCircle());
             return {};
         },
+        // Atajos “tipo producción” para calibrar rápido desde consola
+        cam({ x, y, s } = {}) {
+            const patch = {};
+            if (x !== undefined) patch.camX = x;
+            if (y !== undefined) patch.camY = y;
+            if (s !== undefined) patch.camS = s;
+            return this.set(patch);
+        },
+        poster({ x, y, s } = {}) {
+            const patch = {};
+            if (x !== undefined) patch.sendX = x;
+            if (y !== undefined) patch.sendY = y;
+            if (s !== undefined) patch.sendS = s;
+            return this.set(patch);
+        },
+        // Debug rápido: valores efectivos (CSS vars) ya resueltos
+        read() {
+            const cap = getCaptureTuneScope() || document.documentElement;
+            const send = getSendTuneScope() || cap;
+            const r = (el, v) => getComputedStyle(el).getPropertyValue(v).trim();
+            return {
+                capX: r(cap, "--cap-x"),
+                capY: r(cap, "--cap-y"),
+                capCircleW: r(cap, "--cap-circle-w"),
+                camX: r(cap, "--cam-x"),
+                camY: r(cap, "--cam-y"),
+                camS: r(cap, "--cam-s"),
+                sendX: r(send, "--send-x"),
+                sendY: r(send, "--send-y"),
+                sendS: r(send, "--send-s"),
+            };
+        },
+        help() {
+            console.info(
+                "[KIOSK_TUNE] Ejemplos:\n" +
+                "KIOSK_TUNE.cam({ x: '0px', y: '0px', s: 1 })\n" +
+                "KIOSK_TUNE.poster({ x: '0px', y: '0px', s: 1 })\n" +
+                "KIOSK_TUNE.set({ capCircleW: '320px' })\n" +
+                "KIOSK_TUNE.reset()"
+            );
+            return this.read();
+        },
+
     };
 }
 
@@ -804,14 +731,11 @@ const el = {
     captureCountdownNum: document.querySelector(".capture-countdown-num"),
     captureProgress: document.querySelector(".capture-progress"),
     captureProgressFg: document.querySelector(".capture-progress-fg"),
-    captureBtn: document.querySelector('[data-view="capture"] [data-action="capture"]'),
-    externalModal: document.getElementById("externalModal"),
-    externalFrame: document.getElementById("externalFrame"),
     qrOverlay: document.getElementById("qrOverlay"),
+    qrImage: document.getElementById("qrImage"),
     glassesGuide: document.getElementById("glassesGuide"),
+    captureBtn: document.querySelector(".capture-btn"),
 };
-
-const EXTERNAL_URL = el.externalFrame?.getAttribute("src") || "";
 
 const state = {
     view: "home",
@@ -819,6 +743,8 @@ const state = {
 
     stream: null,
     photoDataUrl: "",
+    shareUrl: "",
+    uploadInFlight: null,
 
     idleTimer: null,
     idlePaused: false,
@@ -841,6 +767,9 @@ const state = {
     countdownTimer: null,
     progressReq: null,
     countdownToken: 0,
+
+    // auto-capture
+    autoCaptureTimer: null,
 };
 
 
@@ -928,6 +857,11 @@ function resumeIdle() {
     bumpIdle();
 }
 
+function stopAutoCapture() {
+    clearTimeout(state.autoCaptureTimer);
+    state.autoCaptureTimer = null;
+}
+
 // P2 opcional: progreso circular real sin tocar el HTML del concepto
 function ensureProgressRing() {
     if (!UX.enableProgressRing) return;
@@ -1013,11 +947,11 @@ function scaleStage() {
     document.documentElement.style.setProperty("--stage-px-w", `${APP.baseW * scale}px`);
     document.documentElement.style.setProperty("--stage-px-h", `${APP.baseH * scale}px`);
 
-    
+
     document.documentElement.style.setProperty("--stage-px-x", `${x}px`);
     document.documentElement.style.setProperty("--stage-px-y", `${y}px`);
     document.documentElement.style.setProperty("--stage-scale", `${scale}`);
-// Si estamos en la pantalla de captura, re-sincronizamos la guía de gafas tras el reflow.
+    // Si estamos en la pantalla de captura, re-sincronizamos la guía de gafas tras el reflow.
     if (state.view === "capture") requestAnimationFrame(() => {
         syncGlassesGuideToCircle();
         positionProgressRing();
@@ -1027,10 +961,10 @@ function scaleStage() {
 function bumpIdle() {
     if (state.idlePaused) return;
     clearTimeout(state.idleTimer);
-    
+
     // Si ya estás en home, no hagas nada (evita parpadeo innecesario)
     if (state.view === "home") return;
-    
+
     state.idleTimer = setTimeout(() => location.reload(), APP.idleMs);
 }
 
@@ -1060,6 +994,259 @@ function stopCountdown() {
     if (state.progressReq) cancelAnimationFrame(state.progressReq);
     state.progressReq = null;
     if (el.captureProgress) el.captureProgress.classList.remove("is-active");
+}
+
+/* =========================
+   Share (Upload CDN) + QR
+   - La app es 100% front (HTML/JS). Las credenciales NO van aquí.
+   - Este módulo asume un backend (Python) en /api/upload_snapshot que:
+       POST { image_data: "data:image/png;base64,...", folder?: "snapshots-aida", filename?: "..." }
+       -> { success: true, url: "https://<cdn>/snapshots-aida/xxx.png" }
+========================= */
+
+// QR: usamos qrserver (simple y sin SDKs)
+function generateQRUrl(url, size = 420) {
+    return `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(url)}`;
+}
+
+function makeQrFallbackSvg(message = "UPLOAD FAILED") {
+    const safe = String(message).replace(/[<>&"]/g, (m) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[m]));
+    const svg = `
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="800">
+  <rect width="100%" height="100%" fill="white"/>
+  <rect x="40" y="40" width="720" height="720" fill="none" stroke="black" stroke-width="18"/>
+  <text x="50%" y="46%" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="52" font-weight="800" fill="black">${safe}</text>
+  <text x="50%" y="56%" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="28" font-weight="600" fill="black">Reinicia y prueba de nuevo</text>
+</svg>`;
+    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+function apiUrl(path) {
+    const base = (APP.apiEndpoint || "").trim().replace(/\/$/, "");
+    if (!path.startsWith("/")) path = `/${path}`;
+    return base ? `${base}${path}` : path; // relative por defecto
+}
+
+async function uploadSnapshotToBackend(dataUrl, { folder = "snapshots-aida", filename = null } = {}) {
+    // Evitamos doble upload si el usuario toca "reiniciar" rápido o si entra/sale.
+    if (!dataUrl) throw new Error("NO_IMAGE_DATAURL");
+
+    const res = await fetch(apiUrl("/api/snapshot"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ data_url: dataUrl, filename }),
+    });
+
+    if (!res.ok) {
+        const t = await res.text().catch(() => "");
+        throw new Error(`UPLOAD_HTTP_${res.status}: ${t.slice(0, 140)}`);
+    }
+
+    const json = await res.json().catch(() => null);
+    if (!json || json.success !== true || !json.url) {
+        throw new Error("UPLOAD_BAD_RESPONSE");
+    }
+    return json.url;
+}
+
+// =========================
+// Fullscreen Poster Export (Pantalla 3)
+// - Genera un PNG 1080x1920 con: Fondo + elementos del póster + foto recortada + Marco
+// - Esto es lo que se sube al CDN para que el QR descargue "la pantalla entera".
+// =========================
+
+function _cssBgToUrl(bgValue) {
+    // bgValue: url("...") o none
+    const m = /url\((['"]?)(.*?)\1\)/.exec(bgValue || "");
+    return m ? m[2] : null;
+}
+
+function _waitImgLoaded(imgEl) {
+    if (!imgEl) return Promise.reject(new Error("IMG_MISSING"));
+    if (imgEl.complete && imgEl.naturalWidth > 0) return Promise.resolve(imgEl);
+    return new Promise((resolve, reject) => {
+        imgEl.addEventListener("load", () => resolve(imgEl), { once: true });
+        imgEl.addEventListener("error", () => reject(new Error("IMG_LOAD_FAIL")), { once: true });
+    });
+}
+
+function _loadImage(src) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        // Si alguna vez mueves assets a otro dominio, esto evita taint (si el server da CORS).
+        img.crossOrigin = "anonymous";
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error(`IMG_LOAD_FAIL: ${src}`));
+        img.src = src;
+    });
+}
+
+function _getStageScaleFromDOM() {
+    // stage está escalado con transform; sacamos scale real desde su tamaño renderizado
+    const stage = el.stage;
+    if (!stage) return 1;
+    const r = stage.getBoundingClientRect();
+    // baseW es 1080 fijo
+    const s = r.width / APP.baseW;
+    return s && isFinite(s) && s > 0 ? s : 1;
+}
+
+function _rectToStagePx(domEl) {
+    const stage = el.stage;
+    if (!stage || !domEl) return null;
+
+    const s = _getStageScaleFromDOM();
+    const sr = stage.getBoundingClientRect();
+    const r = domEl.getBoundingClientRect();
+
+    return {
+        x: (r.left - sr.left) / s,
+        y: (r.top - sr.top) / s,
+        w: r.width / s,
+        h: r.height / s,
+    };
+}
+
+function _applyElementFilter(ctx, domEl) {
+    // Replica filtros tipo drop-shadow
+    const cs = getComputedStyle(domEl);
+    const f = (cs.filter || "none").trim();
+    ctx.filter = f && f !== "none" ? f : "none";
+}
+
+function _clipEllipse(ctx, x, y, w, h) {
+    ctx.beginPath();
+    ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
+    ctx.clip();
+}
+
+async function renderSendPosterToDataUrl() {
+    // Genera PNG full-screen SOLO cuando estamos en SEND
+    if (state.view !== "send") throw new Error("NOT_IN_SEND_VIEW");
+    if (!state.photoDataUrl) throw new Error("NO_PHOTO_DATAURL");
+
+    const stage = el.stage;
+    if (!stage) throw new Error("NO_STAGE");
+
+    const sendView = document.querySelector('.view[data-view="send"]');
+    if (!sendView) throw new Error("NO_SEND_VIEW");
+
+    // Canvas final: 1080x1920 (base)
+    const out = document.createElement("canvas");
+    out.width = APP.baseW;
+    out.height = APP.baseH;
+
+    const ctx = out.getContext("2d", { alpha: true });
+    if (!ctx) throw new Error("NO_2D_CTX");
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+
+    // 1) Fondo del stage (Fondo.png desde CSS)
+    const stageBg = _cssBgToUrl(getComputedStyle(stage).backgroundImage);
+    if (stageBg) {
+        const bgImg = await _loadImage(stageBg);
+        ctx.filter = "none";
+        ctx.drawImage(bgImg, 0, 0, APP.baseW, APP.baseH);
+    }
+
+    // 2) Elementos del póster (orden = como se ve)
+    const elements = [
+        sendView.querySelector(".poster-cines"),
+        el.photoPreview, // #photoPreview (recorte)
+        sendView.querySelector(".poster-logo"),
+        sendView.querySelector(".poster-paco"),
+        sendView.querySelector(".poster-logos"),
+    ].filter(Boolean);
+
+    for (const domEl of elements) {
+        const rect = _rectToStagePx(domEl);
+        if (!rect || rect.w <= 0 || rect.h <= 0) continue;
+
+        // Si es <img>, esperamos carga. Si no lo es, skip.
+        if (domEl.tagName !== "IMG") continue;
+
+        await _waitImgLoaded(domEl);
+
+        ctx.save();
+        _applyElementFilter(ctx, domEl);
+
+        // Para el recorte (photoPreview) replicamos el óvalo (border-radius 999px)
+        if (domEl === el.photoPreview) {
+            _clipEllipse(ctx, rect.x, rect.y, rect.w, rect.h);
+        }
+
+        try {
+            ctx.drawImage(domEl, rect.x, rect.y, rect.w, rect.h);
+        } catch (e) {
+            // Si algún SVG diera guerra, no tiramos la app. Solo lo saltamos.
+            console.warn("[POSTER] draw skip:", domEl.src || domEl, e);
+        }
+        ctx.restore();
+    }
+
+    // 3) Marco superior (Marco.png desde CSS)
+    const frame = document.querySelector(".frame-overlay");
+    if (frame) {
+        const frameBg = _cssBgToUrl(getComputedStyle(frame).backgroundImage);
+        if (frameBg) {
+            const frameImg = await _loadImage(frameBg);
+            ctx.filter = "none";
+            ctx.drawImage(frameImg, 0, 0, APP.baseW, APP.baseH);
+        }
+    }
+
+    // PNG final (coherente con tu backend que sube ContentType=image/png)
+    return out.toDataURL("image/png");
+}
+
+async function ensureShareUrlAndQr() {
+    // Solo aplica en pantalla SEND, con foto disponible.
+    if (state.view !== "send") return null;
+    if (!state.photoDataUrl) return null;
+
+    // Si ya lo tenemos, solo pinta QR.
+    if (state.shareUrl) {
+        if (el.qrImage) el.qrImage.src = generateQRUrl(state.shareUrl, 520);
+        return state.shareUrl;
+    }
+
+    // Si hay un upload en curso, lo esperamos.
+    if (state.uploadInFlight) {
+        try {
+            const url = await state.uploadInFlight;
+            if (state.view === "send" && el.qrImage) el.qrImage.src = generateQRUrl(url, 520);
+            return url;
+        } catch (e) {
+            // cae a fallback más abajo
+        }
+    }
+
+    // Disparamos upload.
+    state.uploadInFlight = (async () => {
+        let payloadDataUrl = state.photoDataUrl;
+        try {
+            payloadDataUrl = await renderSendPosterToDataUrl(); // ✅ póster full-screen
+        } catch (e) {
+            console.warn("[POSTER] fallback to head crop:", e);
+        }
+        const url = await uploadSnapshotToBackend(payloadDataUrl, { folder: "snapshots-aida" });
+
+        state.shareUrl = url;
+        return url;
+    })();
+
+    try {
+        const url = await state.uploadInFlight;
+        if (state.view === "send" && el.qrImage) el.qrImage.src = generateQRUrl(url, 520);
+        return url;
+    } catch (err) {
+        console.error("[UPLOAD] fail:", err);
+        if (state.view === "send" && el.qrImage) el.qrImage.src = makeQrFallbackSvg("UPLOAD FAILED");
+        return null;
+    } finally {
+        state.uploadInFlight = null;
+    }
 }
 
 
@@ -1164,26 +1351,6 @@ function runCountdown() {
 }
 
 
-function closeModal(opts = {}) {
-    const { keepQR = false, keepDim = false } = opts || {};
-    stopRedirect();
-    stopQrReturn();
-
-    if (!keepDim) el.stage.classList.remove("dim-out");
-
-    if (el.externalModal) el.externalModal.classList.add("is-hidden");
-    if (el.qrOverlay) el.qrOverlay.classList.toggle("is-hidden", !keepQR);
-
-    // Siempre reactivamos el idle: si no hay interacción, vuelve a Home solo.
-    resumeIdle();
-    bumpIdle();
-
-    // Si dejamos el QR, damos una ventana corta para escanear y luego volvemos a Home.
-    if (keepQR) {
-        state.qrReturnTimer = setTimeout(() => setView("home"), 22_000);
-    }
-}
-
 /* =========================
    Camera canvas sizing
 ========================= */
@@ -1191,15 +1358,24 @@ function closeModal(opts = {}) {
 function resizeCameraCanvas() {
     if (!el.cameraCanvas) return 1;
 
-    const rect = el.cameraCanvas.getBoundingClientRect();
+    // IMPORTANT:
+    // - El stage se escala con transform (scaleStage()).
+    // - getBoundingClientRect() devuelve tamaño ya escalado (viewport px) y puede bajar a 540×960.
+    // - Para calidad, el buffer interno debe respetar el layout 1080×1920 (o más con DPR).
+    const cssW = el.cameraCanvas.offsetWidth || el.cameraCanvas.clientWidth || APP.baseW;
+    const cssH = el.cameraCanvas.offsetHeight || el.cameraCanvas.clientHeight || APP.baseH;
 
-    // DPR "deseado" (según dispositivo), pero OJO:
-    // si CAM.maxW/maxH capan el canvas, NO podemos aplicar ese DPR.
-    // Si lo aplicas igualmente, acabas dibujando a la mitad de resolución y re-escalando → imagen blanda.
-    const targetDpr = Math.min(CAM.dprCap, window.devicePixelRatio || 1);
+    const dprNative = window.devicePixelRatio || 1;
+    const targetDpr = (CAM.forceDpr != null)
+        ? CAM.forceDpr
+        : Math.min(CAM.dprCap, dprNative);
 
-    const w = Math.min(CAM.maxW, Math.max(1, Math.floor(rect.width * targetDpr)));
-    const h = Math.min(CAM.maxH, Math.max(1, Math.floor(rect.height * targetDpr)));
+    // Nunca permitimos que el buffer sea menor que el layout (evita downsample+upscale → blur)
+    let w = Math.round(cssW * targetDpr);
+    let h = Math.round(cssH * targetDpr);
+
+    w = Math.min(CAM.maxW, Math.max(Math.round(cssW), w, 1));
+    h = Math.min(CAM.maxH, Math.max(Math.round(cssH), h, 1));
 
     if (el.cameraCanvas.width !== w || el.cameraCanvas.height !== h) {
         el.cameraCanvas.width = w;
@@ -1207,8 +1383,8 @@ function resizeCameraCanvas() {
     }
 
     // DPR efectivo REAL (el que de verdad tiene el canvas ahora mismo)
-    const effDprX = rect.width ? (el.cameraCanvas.width / rect.width) : 1;
-    const effDprY = rect.height ? (el.cameraCanvas.height / rect.height) : 1;
+    const effDprX = cssW ? (el.cameraCanvas.width / cssW) : 1;
+    const effDprY = cssH ? (el.cameraCanvas.height / cssH) : 1;
     const effDpr = Math.max(1, Math.min(targetDpr, effDprX, effDprY));
 
     state.canvasDpr = effDpr;
@@ -1257,21 +1433,51 @@ function renderFrame(now = performance.now()) {
 
     // ✅ DPR efectivo (evita downsample+upscale cuando el canvas está capado por CAM.maxW/maxH)
 
-    // object-fit: cover manual
+    // ✅ “Camera Frame” (tuneable): por defecto 1:1 (sin reescalado).
+    // Puedes mover/zoom desde consola con KIOSK_TUNE.set({ camX:'0px', camY:'0px', camS:1 })
     const cw = c.width / dpr;
     const ch = c.height / dpr;
-    const scale = Math.max(cw / vw, ch / vh);
-    const sw = cw / scale;
-    const sh = ch / scale;
-    const sx = Math.floor((vw - sw) / 2);
-    const sy = Math.floor((vh - sh) / 2);
+
+    const tuneScope = getCaptureTuneScope();
+    const camX = readCssVarNumber(tuneScope, "--cam-x", 0);
+    const camY = readCssVarNumber(tuneScope, "--cam-y", 0);
+    const camS = Math.max(0.1, readCssVarNumber(tuneScope, "--cam-s", 1) || 1);
+
+    const dw = Math.round(vw * camS);
+    const dh = Math.round(vh * camS);
+
+    const dx = Math.round((cw - dw) / 2 + camX);
+    const dy = Math.round((ch - dh) / 2 + camY);
+
+    // Actualiza el marco visual del preview (coords en px CSS del stage)
+    try {
+        const fx0 = Math.max(0, dx);
+        const fy0 = Math.max(0, dy);
+        const fx1 = Math.min(cw, dx + dw);
+        const fy1 = Math.min(ch, dy + dh);
+        const fw = Math.max(0, fx1 - fx0);
+        const fh = Math.max(0, fy1 - fy0);
+
+        tuneScope?.style?.setProperty("--cam-frame-x", `${Math.round(fx0)}px`);
+        tuneScope?.style?.setProperty("--cam-frame-y", `${Math.round(fy0)}px`);
+        tuneScope?.style?.setProperty("--cam-frame-w", `${Math.round(fw)}px`);
+        tuneScope?.style?.setProperty("--cam-frame-h", `${Math.round(fh)}px`);
+    } catch { /* noop */ }
+
 
     ctx.save();
-    ctx.imageSmoothingEnabled = true;
+    // Si no escalas (camS=1), mejor sin smoothing. Si escalas, pedimos calidad “high”.
+    ctx.imageSmoothingEnabled = camS !== 1;
     ctx.imageSmoothingQuality = "high";
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cw, ch);
-    ctx.drawImage(v, sx, sy, sw, sh, 0, 0, cw, ch);
+
+    // Fondo sólido por si quedan bandas (no afecta a la transparencia del chroma)
+    ctx.fillStyle = `rgb(${BG_RGB[0]}, ${BG_RGB[1]}, ${BG_RGB[2]})`;
+    ctx.fillRect(0, 0, cw, ch);
+
+    // Dibujo (con tune opcional)
+    ctx.drawImage(v, 0, 0, vw, vh, dx, dy, dw, dh);
     ctx.restore();
 
     if (!state.hasFrame) {
@@ -1442,15 +1648,36 @@ async function startCamera() {
         setCaptureEnabled(false);
         showCameraStatus("Activando cámara…", { kind: "info" });
 
-        const stream = await navigator.mediaDevices.getUserMedia({
+        // ✅ Solicitar resolución PORTRAIT nativa (evita escalado)
+        // Primero intenta alta resolución portrait, luego fallback a resolución media
+        const hi = {
             video: {
                 facingMode: "user",
-                width: { ideal: 1920, max: 1920 },  // tu cámara es 1080p: pedimos 1920×1080 para evitar fallback a 640×480
-                height: { ideal: 1080, max: 1080 },
+                width: { ideal: 1080, min: 720, max: 1920 },   // Portrait: ancho menor
+                height: { ideal: 1920, min: 1280, max: 3840 }, // Portrait: alto mayor
                 frameRate: { ideal: 30, max: 30 },
             },
             audio: false,
-        })
+        };
+
+        const lo = {
+            video: {
+                facingMode: "user",
+                width: { ideal: 720, min: 640 },   // Fallback: 720p portrait
+                height: { ideal: 1280, min: 480 }, // Fallback: 720p portrait
+                frameRate: { ideal: 30, max: 30 },
+            },
+            audio: false,
+        };
+
+        let stream = null;
+
+        try {
+            stream = await navigator.mediaDevices.getUserMedia(hi);
+        } catch (e) {
+            console.warn("[CAM] 4K no disponible, fallback a 1080p.", e);
+            stream = await navigator.mediaDevices.getUserMedia(lo);
+        }
 
         state.stream = stream;
         el.camera.srcObject = stream;
@@ -1491,7 +1718,7 @@ function stopCamera() {
 ========================= */
 
 async function setView(next) {
-    if (state.view === "capture" && next !== "capture") { stopCamera(); stopCaptureLayoutSync(); }
+    if (state.view === "capture" && next !== "capture") { stopCamera(); stopCaptureLayoutSync(); stopAutoCapture(); }
     if (state.view === "send" && next !== "send") { stopRedirect(); stopQrReturn(); }
 
     const activeEl = document.activeElement;
@@ -1507,12 +1734,21 @@ async function setView(next) {
     state.view = next;
 
     if (next === "home") {
-        closeModal();
+        // Limpiar timers y ocultar QR
+        stopRedirect();
+        stopQrReturn();
+        el.stage.classList.remove("dim-out");
+        if (el.qrOverlay) el.qrOverlay.classList.add("is-hidden");
+        resumeIdle();
+
         stopRenderLoop();
         stopCamera();
         stopCountdown();
         state.photoDataUrl = "";
+        state.shareUrl = "";
+        state.uploadInFlight = null;
         if (el.photoPreview) el.photoPreview.src = "data:,";
+        if (el.qrImage) el.qrImage.src = "data:,";
         if (el.qrOverlay) el.qrOverlay.classList.add("is-hidden");
         hideCameraStatus();
     }
@@ -1524,6 +1760,20 @@ async function setView(next) {
         // ✅ Capa de tuning persistente (venue-ready)
         applyCaptureTune(loadCaptureTune());
         exposeTuneApi();
+
+        // Si vienes de un build anterior con valores guardados, puede quedar todo “descentrado”.
+        // Para evitarlo, limpiamos el tune si cambia el BUILD_ID.
+        (function tuneBuildGuard() {
+            const key = "KIOSK_TUNE_BUILD_ID";
+            try {
+                const prev = localStorage.getItem(key);
+                if (prev !== BUILD_ID) {
+                    localStorage.setItem(key, BUILD_ID);
+                    localStorage.removeItem(CAPTURE_TUNE.storageKey);
+                }
+            } catch { }
+        })();
+
 
         updateGlassesGuide();
         startCaptureLayoutSync();
@@ -1539,9 +1789,7 @@ async function setView(next) {
 
         await waitVideoReady(el.camera);
 
-        // Warm-up MediaPipe (no bloquea la UI). Si falla, seguimos igual.
-        // Esto evita que la primera captura tenga “lag” por cargar wasm/model.
-        initHeadSegmenter();
+        // Sin segmentación externa: el recorte final se hace por silueta (Pantalla 2).
 
         state.hasFrame = false;
         setCaptureEnabled(false);
@@ -1555,23 +1803,49 @@ async function setView(next) {
         stopCountdown();
 
         if (el.qrOverlay) el.qrOverlay.classList.add("is-hidden");
+
+        // ✅ AUTO-CAPTURE: Espera 2 segundos y dispara automáticamente
+        stopAutoCapture();
+        state.autoCaptureTimer = setTimeout(() => {
+            if (state.view === "capture" && state.hasFrame && !state.isCounting) {
+                startCaptureSequence().catch(console.error);
+            }
+        }, 2000);
     }
 
     if (next === "send") {
         el.photoPreview.src = state.photoDataUrl || "";
         stopRedirect();
+
+        // ✅ Subida al CDN + QR (arranca ya, para llegar a tiempo al overlay)
+        ensureShareUrlAndQr();
+
+        // Después de 5 segundos: oscurecer y mostrar QR
         state.redirectTimer = setTimeout(() => {
             el.stage.classList.add("dim-out");
+
             setTimeout(() => {
-                pauseIdle(); // P1: dentro del iframe no hay bumpIdle()
+                pauseIdle(); // Pausar idle mientras está el QR
 
-                if (el.externalFrame && EXTERNAL_URL) {
-                    const cur = el.externalFrame.getAttribute("src") || "";
-                    if (!cur || cur === "about:blank") el.externalFrame.src = EXTERNAL_URL;
-                }
+                // Mostrar QR cuando esté listo (o fallback), sin bloquear UI
+                (async () => {
+                    // Asegura que el QR tenga algo (URL o fallback SVG)
+                    await ensureShareUrlAndQr();
 
-                if (el.externalModal) el.externalModal.classList.remove("is-hidden");
-                if (el.qrOverlay) el.qrOverlay.classList.remove("is-hidden"); // mostrar QR mientras está el iframe
+                    if (el.qrOverlay) el.qrOverlay.classList.remove("is-hidden");
+                })().catch((e) => {
+                    console.error("[QR] fail:", e);
+                    if (el.qrImage) el.qrImage.src = makeQrFallbackSvg("QR ERROR");
+                    if (el.qrOverlay) el.qrOverlay.classList.remove("is-hidden");
+                });
+
+                // Después de 22 segundos con QR, volver a home
+                state.qrReturnTimer = setTimeout(() => {
+                    el.stage.classList.remove("dim-out");
+                    if (el.qrOverlay) el.qrOverlay.classList.add("is-hidden");
+                    resumeIdle();
+                    setView("home");
+                }, 22_000);
             }, 700);
         }, 5000);
     }
@@ -1601,12 +1875,11 @@ function getElemRectPx(elem, canvasEl) {
     return { x, y, w, h, cx: x + w / 2, cy: y + h / 2 };
 }
 
-function getGuideCirclePx() {
+function getGuideCirclePx(canvasEl = el.cameraCanvas) {
     const circle = document.querySelector(".capture-circle");
-    const canvas = el.cameraCanvas;
-    if (!circle || !canvas) return null;
+    if (!circle || !canvasEl) return null;
 
-    const rect = getElemRectPx(circle, canvas);
+    const rect = getElemRectPx(circle, canvasEl);
     if (!rect) return null;
 
     // usamos el diámetro visual del círculo como referencia (en px de canvas)
@@ -1614,60 +1887,95 @@ function getGuideCirclePx() {
     return { cx: rect.cx, cy: rect.cy, r };
 }
 
-function getGlassesGuidePx() {
+function getGlassesGuidePx(canvasEl = el.cameraCanvas) {
     // guía opcional: si no existe, usamos GLASSES_FIT como fallback
-    const canvas = el.cameraCanvas;
     const g = el.glassesGuide;
-    if (!g || !canvas) return null;
-    return getElemRectPx(g, canvas);
+    if (!g || !canvasEl) return null;
+    return getElemRectPx(g, canvasEl);
 }
 
-function extractHeadCanvas(previewCanvas) {
-    const guide = getGuideCirclePx();
+function makeMirroredCanvas(srcCanvas) {
+    const c = document.createElement("canvas");
+    c.width = srcCanvas.width;
+    c.height = srcCanvas.height;
 
-    const cut = document.createElement("canvas");
-    cut.width = HEAD.size;
-    cut.height = HEAD.size;
+    const ctx = c.getContext("2d", { alpha: true, willReadFrequently: false });
+    if (!ctx) throw new Error("NO_2D_CTX_MIRROR");
 
-    const ctx = cut.getContext("2d", { alpha: true });
-    ctx.clearRect(0, 0, cut.width, cut.height);
+    ctx.clearRect(0, 0, c.width, c.height);
+    ctx.save();
+    ctx.translate(c.width, 0);
+    ctx.scale(-1, 1);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(srcCanvas, 0, 0);
+    ctx.restore();
+
+    return c;
+}
+
+function extractHeadCanvas(srcCanvas, uiCanvas = el.cameraCanvas) {
+    // IMPORTANTE:
+    // - El buffer del canvas NO está espejado. El espejo lo hace CSS: #cameraCanvas { transform: scaleX(-1) }
+    // - La guía (círculo) está en coordenadas “de pantalla” (lo que ve el usuario).
+    // - Para que la exportación coincida con el preview, recortamos desde el buffer real,
+    //   pero convirtiendo X a “espacio real” y exportando el crop ya espejado.
+
+    const guide = getGuideCirclePx(uiCanvas);
 
     // Fallback si por lo que sea no medimos la guía (DOM no listo)
-    const fallbackR = Math.min(previewCanvas.width, previewCanvas.height) * 0.18;
-    const cx = guide ? guide.cx : previewCanvas.width * 0.5;
-    const cy = guide ? guide.cy : previewCanvas.height * 0.40;
+    const fallbackR = Math.min(srcCanvas.width, srcCanvas.height) * 0.18;
+
+    // Coordenadas “UI” (lo que mide el DOM sobre el canvas)
+    const cxUI = guide ? guide.cx : srcCanvas.width * 0.5;
+    const cyUI = guide ? guide.cy : srcCanvas.height * 0.44;
     const r = guide ? guide.r : fallbackR;
 
-    // Crop cuadrado que respeta la guía: lo que el usuario ve = lo que se compone
-    let crop = Math.round(r * 2 * COMPOSE.pad);
-    crop = Math.max(2, Math.min(crop, previewCanvas.width, previewCanvas.height));
+    // ✅ Crop en px del canvas (buffer real)
+    const desiredCrop = Math.max(32, Math.round(r * 2 * (COMPOSE.exportPad || 1)));
+    const crop = Math.min(desiredCrop, srcCanvas.width, srcCanvas.height);
 
-    let sx = Math.round(cx - crop / 2);
-    let sy = Math.round(cy - crop / 2);
+    // ✅ NO reescalamos: 1:1 (lo que hay dentro del crop sale tal cual)
+    const out = crop;
 
-    // clamp sin recortar (mueve la ventana dentro del frame)
-    sx = Math.max(0, Math.min(sx, previewCanvas.width - crop));
-    sy = Math.max(0, Math.min(sy, previewCanvas.height - crop));
+    // Crop clamp en “espacio UI”
+    const sxUI = Math.round(cxUI - crop / 2);
+    const syUI = Math.round(cyUI - crop / 2);
 
-    ctx.drawImage(previewCanvas, sx, sy, crop, crop, 0, 0, cut.width, cut.height);
-    // Máscara circular (opcional). Si usas MediaPipe, déjalo OFF.
-    if (COMPOSE.useCircleMask) {
-    
-    
-        // Máscara circular (poster actual ya lo trata como círculo)
-        ctx.save();
-        ctx.globalCompositeOperation = "destination-in";
-        ctx.beginPath();
-        ctx.arc(cut.width / 2, cut.height / 2, (cut.width / 2) * COMPOSE.maskScale, 0, Math.PI * 2);
-        ctx.closePath();
-        ctx.fill();
-        ctx.restore();
-    }
+    const sxUIClamped = Math.max(0, Math.min(srcCanvas.width - crop, sxUI));
+    const syUIClamped = Math.max(0, Math.min(srcCanvas.height - crop, syUI));
 
-    // guardamos mapping para mapear la guía de gafas a esta composición
-    state.lastCrop = { sx, sy, sw: crop, sh: crop, out: cut.width };
+    // Convertimos X al “espacio real” (buffer no espejado)
+    // UI (espejado) -> SRC (real): x_src = W - (x_ui + w)
+    const sxSrc = Math.round(srcCanvas.width - (sxUIClamped + crop));
+    const sySrc = syUIClamped;
+
+    const cut = document.createElement("canvas");
+    cut.width = out;
+    cut.height = out;
+
+    const ctx = cut.getContext("2d", { alpha: true, willReadFrequently: false });
+    if (!ctx) throw new Error("NO_2D_CTX_CUT");
+
+    ctx.clearRect(0, 0, cut.width, cut.height);
+
+    // No hay scaling (out === crop), pero sí espejo. Mejor evitar “softening”.
+    ctx.imageSmoothingEnabled = false;
+
+    // Dibujamos ya espejado para que el resultado sea 1:1 con el preview
+    ctx.save();
+    ctx.translate(out, 0);
+    ctx.scale(-1, 1);
+    ctx.drawImage(
+        srcCanvas,
+        sxSrc, sySrc, crop, crop,
+        0, 0, out, out
+    );
+    ctx.restore();
+
+    // guardamos mapping para mapear guías (en coords del UI canvas) a este crop
+    // (IMPORTANTE: sx/sy en espacio UI, porque ahí medimos la guía con DOM)
+    state.lastCrop = { sx: sxUIClamped, sy: syUIClamped, sw: crop, sh: crop, out };
 
     return cut;
 }
@@ -1682,7 +1990,7 @@ function mapRectToHeadCrop(rect, crop) {
     const h = rect.h * s;
     const cx = (rect.cx - crop.sx) * s;
     const cy = (rect.cy - crop.sy) * s;
-    if (![x,y,w,h,cx,cy].every(Number.isFinite)) return null;
+    if (![x, y, w, h, cx, cy].every(Number.isFinite)) return null;
     return { x, y, w, h, cx, cy };
 }
 
@@ -1702,7 +2010,7 @@ function drawGlassesOnHead(headCanvas, caretaId, glassesImg, guideInHead = null)
 
     // Si tenemos guía real en Pantalla 2, mandamos con eso (P0: guía que impacta de verdad)
     if (COMPOSE.useGlassesGuide && guideInHead && Number.isFinite(guideInHead.cx) && Number.isFinite(guideInHead.cy) && Number.isFinite(guideInHead.w) && guideInHead.w > 4) {
-        const targetW = guideInHead.w;
+        const targetW = guideInHead.w * (COMPOSE.glassesScale ?? 1);
         const targetH = targetW / aspect;
 
         // opcional: pequeña rotación por careta (si algún día lo necesitáis)
@@ -1717,7 +2025,7 @@ function drawGlassesOnHead(headCanvas, caretaId, glassesImg, guideInHead = null)
 
     // Fallback: comportamiento antiguo (por si no existe guía o falla el DOM)
     const fit = GLASSES_FIT[caretaId] || { x: 0.5, y: 0.47, s: 0.8, r: 0 };
-    const targetW = headCanvas.width * fit.s;
+    const targetW = headCanvas.width * fit.s * (COMPOSE.glassesScale ?? 1);
     const targetH = targetW / aspect;
 
     const x = headCanvas.width * fit.x;
@@ -1732,53 +2040,54 @@ function drawGlassesOnHead(headCanvas, caretaId, glassesImg, guideInHead = null)
 
 
 async function capturePhoto() {
-    const preview = el.cameraCanvas;
-    if (!preview || !preview.width || !preview.height || !state.hasFrame) {
+    const uiCanvas = el.cameraCanvas;
+    if (!uiCanvas || !uiCanvas.width || !uiCanvas.height || !state.hasFrame) {
         showCameraStatus("Aún no hay señal… espera 1s.", { kind: "error", pulse: true });
         throw new Error("NO_CAMERA_FRAME");
     }
 
-    // P0: Pantalla 3 = “head-only” (grande, centrado) usando la guía de la Pantalla 2.
-// Objetivo: que #photoPreview sea SOLO la cabeza (sin “lienzo” gigante transparente).
-const headCanvas = extractHeadCanvas(preview);
+    const careta = state.selectedCareta || CARETAS[0];
+    const glassesImg = await getGlassesImage(careta);
 
-// ✅ Segmentación (pelo/cara/orejas) sobre el headCanvas.
-// Nota: el modelo es 256×256 internamente, pero lo escalamos a un headCanvas grande para que la salida sea nítida.
-if (HEAD_SEG.enabled) {
-    try {
-        const headGuide = guideCircleForHeadCanvas(headCanvas);
-        const ok = await applyHeadSegmentationToCanvas(headCanvas, headGuide);
-        if (!ok) console.warn("[HEAD_SEG] Máscara no aplicada (sin resultados).");
-    } catch (e) {
-        console.warn("[HEAD_SEG] Falló la máscara; seguimos con el recorte.", e);
+    // 1) Creamos un “srcCanvas” que es EXACTAMENTE lo que el usuario ve (espejado)
+    const srcCanvas = uiCanvas;
+
+    // Nota: el preview se ve espejado por CSS (scaleX(-1)).
+    // Para que el póster coincida con lo que ve el usuario, el recorte se exporta espejado desde el buffer real.
+    // 2) Extraemos crop 1:1 (sin reescalado) centrado en la guía de Pantalla 2
+    const headCanvas = extractHeadCanvas(srcCanvas, uiCanvas);
+
+    // 3) Aplicamos óvalo + feather (un poco más grande que la guía)
+    if (GUIDE_MASK.enabled) {
+        applyGuideMaskToHeadCanvas(headCanvas, uiCanvas);
     }
-}
 
-const careta = state.selectedCareta || CARETAS[0];
-const glassesImg = await getGlassesImage(careta);
+    // 4) Pintamos gafas encima (sin re-rasterizar en CSS)
+    if (glassesImg) {
+        const gpx = getGlassesGuidePx(uiCanvas);
+        if (gpx && state.lastCrop) {
+            const guideInHead = mapRectToHeadCrop(gpx, state.lastCrop);
+            drawGlassesOnHead(headCanvas, careta.id, glassesImg, guideInHead);
+        } else {
+            drawGlassesOnHead(headCanvas, careta.id, glassesImg, null);
+        }
+    }
 
-// Guía DOM → preview px → head px (lo que alineas es lo que exportas).
-const gpx = getGlassesGuidePx();
-const guideInHead = (gpx && state.lastCrop) ? mapRectToHeadCrop(gpx, state.lastCrop) : null;
+    // Export: PNG (sin pérdida)
+    const dataUrl = headCanvas.toDataURL("image/png");
+    state.photoDataUrl = dataUrl;
 
-if (glassesImg) {
-    drawGlassesOnHead(headCanvas, careta.id, glassesImg, guideInHead);
-}
+    if (el.photoPreview) el.photoPreview.src = dataUrl;
 
-state.photoDataUrl = headCanvas.toDataURL("image/png");
+    // Navegamos a “send”
     setView("send");
 }
+
 
 async function startCaptureSequence() {
     if (state.isCounting) return;
 
-    // Reset visual del botón (evita quedarse “hundido” en algunos touchscreens)
-    if (el.captureBtn) {
-        el.captureBtn.classList.remove("is-pressed");
-        el.captureBtn.blur?.();
-    }
-
-// P0 UX: no iniciar si aún no hay frame
+    // P0 UX: no iniciar si aún no hay frame
     if (!state.hasFrame) {
         showCameraStatus("Esperando señal de cámara…", { kind: "info", pulse: true });
         setCaptureEnabled(false);
@@ -1821,12 +2130,8 @@ document.addEventListener("click", (e) => {
     }
 
     if (a === "home") setView("home");
-    if (a === "capture") startCaptureSequence().catch(console.error);
+    // "capture" action eliminado (ahora es automático)
     if (a === "retake") setView("capture");
-
-    if (a === "close-modal") {
-        closeModal({ keepQR: true, keepDim: true });
-    }
 });
 
 // Click en el canvas (solo captura) para fijar key color manual
@@ -1852,9 +2157,165 @@ document.addEventListener("visibilitychange", () => {
 ========================= */
 
 window.addEventListener("resize", scaleStage);
-initCaptureButtonUX();
 initQrButtonUX();
 exposeTuneApi();
 applyCaptureTune(loadCaptureTune());
 scaleStage();
 bumpIdle();
+
+/* =========================================================
+   KIOSK_TUNE HOTFIX (reactiva cam + counter + send + capture)
+   - Pegar al FINAL del index.js
+   - No rompe el resto: solo reexpone window.KIOSK_TUNE
+========================================================= */
+(() => {
+    const LS_KEY = "KIOSK_TUNE_V3";
+
+    const CAPTURE_SCOPE = () => document.querySelector('.view[data-view="capture"]');
+    const SEND_SCOPE = () => document.querySelector('.view[data-view="send"]');
+
+    // Mapa: KEY pública -> CSS var
+    const VARS = {
+        // PACK / SILUETA
+        capX: "--cap-x",
+        capY: "--cap-y",
+        capCircleW: "--cap-circle-w",
+
+        // GAFAS (nudges)
+        glassesNudgeX: "--cap-glasses-nudge-x",
+        glassesNudgeY: "--cap-glasses-nudge-y",
+        glassesNudgeS: "--cap-glasses-nudge-s",
+
+        // CONTADOR (anillo + número)
+        capCounterX: "--cap-counter-x",
+        capCounterY: "--cap-counter-y",
+        capCounterW: "--cap-counter-w",
+
+        // CÁMARA (offset/zoom del “frame”)
+        camX: "--cam-x",
+        camY: "--cam-y",
+        camS: "--cam-s",
+
+        // SEND (pantalla 3)
+        sendX: "--send-x",
+        sendY: "--send-y",
+        sendS: "--send-s",
+    };
+
+    // Aliases para compatibilidad (por si en algún momento cambiaste nombres)
+    const ALIASES = {
+        // contador
+        counterX: "capCounterX",
+        counterY: "capCounterY",
+        counterW: "capCounterW",
+
+        // gafas
+        capGlassesNudgeX: "glassesNudgeX",
+        capGlassesNudgeY: "glassesNudgeY",
+        capGlassesNudgeS: "glassesNudgeS",
+    };
+
+    const normalizePatch = (patch = {}) => {
+        const out = {};
+        for (const [k, v] of Object.entries(patch)) {
+            const kk = ALIASES[k] || k;
+            if (kk in VARS) out[kk] = v;
+        }
+        return out;
+    };
+
+    const load = () => {
+        try {
+            return JSON.parse(localStorage.getItem(LS_KEY) || "{}") || {};
+        } catch {
+            return {};
+        }
+    };
+
+    const save = (obj) => {
+        localStorage.setItem(LS_KEY, JSON.stringify(obj));
+    };
+
+    const applyToScope = (scopeEl, patch) => {
+        if (!scopeEl) return;
+        for (const [k, v] of Object.entries(patch)) {
+            const cssVar = VARS[k];
+            if (!cssVar) continue;
+            scopeEl.style.setProperty(cssVar, String(v));
+        }
+    };
+
+    const apply = () => {
+        const t = load();
+        const cap = CAPTURE_SCOPE();
+        const send = SEND_SCOPE();
+
+        // Aplica capture-related
+        const capPatch = {};
+        for (const k of Object.keys(VARS)) {
+            if (k.startsWith("send")) continue;
+            if (t[k] !== undefined) capPatch[k] = t[k];
+        }
+        applyToScope(cap, capPatch);
+
+        // Aplica send-related
+        const sendPatch = {};
+        for (const k of Object.keys(VARS)) {
+            if (!k.startsWith("send")) continue;
+            if (t[k] !== undefined) sendPatch[k] = t[k];
+        }
+        applyToScope(send, sendPatch);
+
+        // Forzar “recolocado” si existen estas funciones en tu script
+        try { if (typeof positionProgressRing === "function") positionProgressRing(); } catch { }
+        try {
+            // algunos builds dibujan cámara en canvas en RAF; esto ayuda a refrescar layout
+            window.dispatchEvent(new Event("resize"));
+        } catch { }
+
+        // Si el contador está visible, reflow suave
+        const cd = document.querySelector(".capture-countdown");
+        if (cd) void cd.offsetWidth;
+    };
+
+    const api = {
+        set(patch) {
+            const clean = normalizePatch(patch);
+            if (!Object.keys(clean).length) return;
+            const t = load();
+            Object.assign(t, clean);
+            save(t);
+            apply();
+            return t;
+        },
+        get() {
+            return load();
+        },
+        reset() {
+            localStorage.removeItem(LS_KEY);
+            apply(); // re-aplica (queda en defaults del CSS)
+        },
+        apply,
+        // helper: mostrar contador aunque no esté corriendo (para tunear “en vivo”)
+        showCounter() {
+            const cd = document.querySelector(".capture-countdown");
+            if (cd) {
+                cd.classList.remove("is-hidden");
+                cd.setAttribute("aria-hidden", "false");
+            }
+            apply();
+        },
+        hideCounter() {
+            const cd = document.querySelector(".capture-countdown");
+            if (cd) {
+                cd.classList.add("is-hidden");
+                cd.setAttribute("aria-hidden", "true");
+            }
+        }
+    };
+
+    window.KIOSK_TUNE = api;
+
+    // Aplica lo guardado al cargar
+    apply();
+})();

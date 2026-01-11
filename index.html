@@ -63,18 +63,16 @@
                     <div class="camera-shell">
                         <canvas id="cameraCanvas"></canvas>
                         <video id="camera" muted playsinline></video>
-                        <img class="capture-text" src="assets/Pantalla2/Texto.svg"
-                            alt="Sitúa tu rostro y pulsa continuar">
+                        <p class="capture-text">Sitúa tu rostro en la marca<br>y espera 5 segundos</p>
                         <img class="capture-circle" src="assets/Pantalla2/CirculoCara.png" alt="">
-                        <img id="glassesGuide" class="capture-glasses-guide is-hidden" alt="">
+                        <img id="glassesGuide" class="capture-glasses-guide is-hidden" src="data:," alt="">
 
                         <div class="capture-countdown is-hidden" aria-hidden="true">
                             <div class="capture-countdown-num">5 </div>
                         </div>
-                        <button class="capture-btn" type="button" data-action="capture" aria-label="Continuar" aria-describedby="cameraStatus">
-                            <img src="assets/Pantalla2/Boton.png" alt="Continuar">
-                        </button>
                     </div>
+
+                    <img class="capture-logo" src="assets/Logo.png" alt="AIDA y vuelta">
 
                     <p class="capture-instructions is-hidden">Coloca tu rostro en el área de vista y sonríe.</p>
                     <p class="camera-status is-hidden" id="cameraStatus" role="status"></p>
@@ -100,20 +98,14 @@
         </main>
     </div>
 
-    <div id="externalModal" class="modal is-hidden" role="dialog" aria-modal="true" aria-label="Formulario promocional">
-        <div class="modal-backdrop"></div>
-        <div class="modal-content">
-            <button class="modal-close" type="button" data-action="close-modal"
-                aria-label="Cerrar formulario">✕</button>
-            <iframe src="https://www.sonypictures.es/form/promocion-aida" id="externalFrame" title="Formulario Sony Pictures" loading="lazy"></iframe>
-        </div>
+    <div id="qrOverlay" class="qr-overlay is-hidden">
+        <img id="qrImage" class="qr-code" src="data:," alt="QR de la promo">
+        <button class="btn-reiniciar" type="button" data-action="home" aria-label="Reiniciar">
+            Reiniciar
+        </button>
     </div>
 
-    <div id="qrOverlay" class="qr-overlay is-hidden" aria-hidden="true">
-        <img class="qr-code" src="assets/Pantalla4/qr.png" alt="QR de la promo">
-    </div>
-
-	    <!-- index.js se ejecuta como ES module para poder importar MediaPipe Tasks Vision (CDN). -->
+	    <!-- index.js se ejecuta como ES module (tuning y carga de assets). -->
 	    <script type="module" src="scripts/index.js"></script>
 </body>
 
