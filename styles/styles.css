@@ -884,6 +884,15 @@ input {
     transform: scale(0.96);
     filter: drop-shadow(0 14px 22px rgb(0 0 0 / .30));
 }
+
+/* Texto "Escanea para obtener tu foto." debajo del QR */
+.qr-scan-text {
+    width: min(460px, 54%); /* Mismo ancho que el QR */
+    height: auto;
+    pointer-events: none;
+    filter: drop-shadow(0 4px 8px rgb(0 0 0 / .25));
+}
+
 .qr-overlay.is-hidden{
     display: none;
 }
