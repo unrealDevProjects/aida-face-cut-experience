@@ -17,7 +17,7 @@
 
     /* SEND: Ajustes manuales (Pantalla 3) */
     --send-x: 0px;
-    --send-y: 0px;
+    --send-y: -120px;
     --send-s: 1;
 
     --w: 1080;
@@ -745,7 +745,7 @@ input {
 
 .view[data-view="send"] .poster-cines {
     position: absolute;
-    top: 80px;
+    top: 200px;
     left: 40%;
     transform: translateX(-50%);
     width: 540px;
@@ -780,7 +780,7 @@ input {
 
 .view[data-view="send"] .poster-logo {
     position: absolute;
-    top: 1410px;
+    top: 1300px;
     left: 68%;
     transform: translateX(-50%);
     width: 320px;
@@ -791,7 +791,7 @@ input {
 
 .view[data-view="send"] .poster-paco {
     position: absolute;
-    top: 1650px;
+    top: 1550px;
     left: 36%;
     transform: translateX(-50%);
     width: 720px;
@@ -801,7 +801,7 @@ input {
 
 .view[data-view="send"] .poster-logos {
     position: absolute;
-    bottom: 80px;
+    bottom: 120px;
     left: 42.5%;
     transform: translateX(-50%);
     width: 820px;
@@ -1059,8 +1059,12 @@ input {
   object-position: 50% 50%;
 
   /* Ajuste manual desde consola (KIOSK_TUNE) */
-  transform: translate(var(--send-x), var(--send-y)) scale(var(--send-s));
+  transform: translate3d(var(--send-x), var(--send-y), 0) scale(var(--send-s));
   transform-origin: 50% 50%;
+
+  /* Micro-boost de rendimiento en GPU (sin cambiar look) */
+  will-change: transform;
+  backface-visibility: hidden;
 
   /* ✅ La foto YA viene recortada con alpha (óvalo+feather). Sombra sin rerender raro */
   filter: drop-shadow(0 20px 34px rgb(0 0 0 / .28));

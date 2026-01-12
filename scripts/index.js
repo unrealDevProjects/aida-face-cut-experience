@@ -110,7 +110,9 @@ const COMPOSE = {
 ========================= */
 
 const GUIDE_MASK = {
-    enabled: true,
+    // ⚠️ Antes recortábamos con un óvalo “geométrico”.
+    // Ahora lo dejamos apagado por defecto porque vamos a recortar por segmentación (pelo+cara).
+    enabled: false,
     // Selector del elemento que define la guía en Pantalla 2 (solo usamos su rect)
     selector: ".capture-circle",
 
@@ -209,6 +211,274 @@ function applyGuideMaskToHeadCanvas(headCanvas, previewCanvas) {
     ctx.drawImage(maskToUse, 0, 0);
     ctx.restore();
 
+    return true;
+}
+
+/* =========================
+   Head cutout “pro” (MediaPipe)
+   - Objetivo: quitar el óvalo y sacar un recorte real de cabeza (pelo + cara).
+   - Estrategia:
+     1) ImageSegmenter (selfie_multiclass) => máscara por categorías (pelo, piel, etc.)
+     2) FaceLandmarker => ROI de cabeza (para no llevarnos hombros/pecho)
+     3) Matte cleanup: dilate + feather (suave, sin serruchos)
+   - Rendimiento: se carga bajo demanda (cuando capturas).
+========================= */
+
+const HEAD_CUT = {
+    enabled: true,
+
+    // Categories del modelo selfie_multiclass_256x256
+    // 0 background, 1 hair, 2 body-skin, 3 face-skin, 4 clothes, 5 others
+    // ✅ Quitamos body-skin para evitar cuello/hombros en el recorte.
+    keepCategories: [1, 3, 5],
+
+    // ROI (face bounds -> head bounds). Ajustes “corporate”: knobs.
+    roiPadX: 1.70,          // más ancho para orejas/pelo lateral
+    roiPadTop: 2.25,        // subir para pelo
+    roiPadBottom: 0.65,     // ✅ menos cuello (más “cara/cabeza”)
+
+    // Corte extra bajo la barbilla (en múltiplos de altura de cara)
+    // 0.00 = justo en el chin, 0.10 = deja un pelín de margen.
+    neckExtra: 0.02,        // ✅ recorta antes el cuello
+
+    // Matte clean
+    dilatePx: 2,
+    featherPx: 3,
+
+    // Post: limpia bordes (menos “serrucho”/ruido sin hacerlos borrosos)
+    alphaTighten: {
+        lo: 42,   // empieza a “encender” alpha (0..255)
+        hi: 210,  // llega a 1.0 alpha (0..255)
+        gamma: 0.95
+    },
+};
+
+const mpHeadCut = {
+    ready: null,
+    vision: null,
+    segmenter: null,
+    landmarker: null,
+};
+
+async function initMediaPipeHeadCut() {
+    if (mpHeadCut.ready) return mpHeadCut.ready;
+
+    mpHeadCut.ready = (async () => {
+        // ESM import (CDN)
+        const vision = (await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.17"));
+        const { FilesetResolver, ImageSegmenter, FaceLandmarker } = vision;
+        mpHeadCut.vision = vision;
+
+        const fileset = await FilesetResolver.forVisionTasks(
+            "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.17/wasm"
+        );
+
+        // 1) Segmentación multiclass (pelo / piel / ropa / fondo)
+        mpHeadCut.segmenter = await ImageSegmenter.createFromOptions(fileset, {
+            baseOptions: {
+                // Modelo oficial de MediaPipe
+                modelAssetPath:
+                    "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite",
+                delegate: "GPU",
+            },
+            outputCategoryMask: true,
+            runningMode: "IMAGE",
+        });
+
+        // 2) Landmarks para ROI de cabeza
+        mpHeadCut.landmarker = await FaceLandmarker.createFromOptions(fileset, {
+            baseOptions: {
+                modelAssetPath:
+                    "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task",
+                delegate: "GPU",
+            },
+            runningMode: "IMAGE",
+            numFaces: 1,
+        });
+    })();
+
+    return mpHeadCut.ready;
+}
+
+function getFaceBoundsFromLandmarks(landmarks, w, h) {
+    if (!landmarks || !landmarks.length) return null;
+    let minX = Infinity,
+        minY = Infinity,
+        maxX = -Infinity,
+        maxY = -Infinity;
+    for (const p of landmarks) {
+        const x = p.x * w;
+        const y = p.y * h;
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+    }
+    if (![minX, minY, maxX, maxY].every(Number.isFinite)) return null;
+    return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
+}
+
+function expandToHeadROI(faceBounds, canvasW, canvasH) {
+    if (!faceBounds) return { x: 0, y: 0, w: canvasW, h: canvasH };
+
+    const cx = (faceBounds.minX + faceBounds.maxX) / 2;
+    const cy = (faceBounds.minY + faceBounds.maxY) / 2;
+    const fw = Math.max(8, faceBounds.w);
+    const fh = Math.max(8, faceBounds.h);
+
+    const roiW = fw * HEAD_CUT.roiPadX;
+    const roiTop = fh * HEAD_CUT.roiPadTop;
+    const roiBottom = fh * HEAD_CUT.roiPadBottom;
+
+    const x = Math.max(0, Math.round(cx - roiW / 2));
+    const y = Math.max(0, Math.round(cy - roiTop));
+    const w = Math.min(canvasW - x, Math.round(roiW));
+    const h = Math.min(canvasH - y, Math.round(roiTop + roiBottom));
+    return { x, y, w, h };
+}
+
+function dilateMask(alpha, w, h, radiusPx) {
+    if (!radiusPx || radiusPx <= 0) return alpha;
+    const out = new Uint8ClampedArray(alpha.length);
+    out.set(alpha);
+
+    // radio pequeño => brute force aceptable para el tamaño del headCanvas
+    for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+            const i = y * w + x;
+            if (alpha[i] === 255) continue;
+            let hit = 0;
+            for (let dy = -radiusPx; dy <= radiusPx && !hit; dy++) {
+                const yy = y + dy;
+                if (yy < 0 || yy >= h) continue;
+                for (let dx = -radiusPx; dx <= radiusPx; dx++) {
+                    const xx = x + dx;
+                    if (xx < 0 || xx >= w) continue;
+                    if (alpha[yy * w + xx] === 255) {
+                        hit = 255;
+                        break;
+                    }
+                }
+            }
+            out[i] = hit;
+        }
+    }
+    return out;
+}
+
+async function applyHeadCutoutToCanvas(headCanvas) {
+    if (!HEAD_CUT.enabled) return false;
+    if (!headCanvas || !headCanvas.width || !headCanvas.height) return false;
+
+    await initMediaPipeHeadCut();
+    const w = headCanvas.width;
+    const h = headCanvas.height;
+
+    // 1) ROI por face landmarks (y corte de cuello)
+    let roi = { x: 0, y: 0, w, h };
+    let faceBounds = null;
+    let neckCutY = null;
+    try {
+        const faceRes = mpHeadCut.landmarker.detect(headCanvas);
+        const lms = faceRes?.faceLandmarks?.[0];
+        faceBounds = getFaceBoundsFromLandmarks(lms, w, h);
+        roi = expandToHeadROI(faceBounds, w, h);
+        if (faceBounds && Number.isFinite(faceBounds.maxY) && Number.isFinite(faceBounds.h)) {
+            const extra = Math.max(0, Number(HEAD_CUT.neckExtra ?? 0));
+            neckCutY = Math.min(h - 1, Math.round(faceBounds.maxY + faceBounds.h * extra));
+        }
+    } catch (e) {
+        // si falla, seguimos sin ROI (no bloquea capture)
+    }
+
+    // 2) Segmentación multiclass
+    const segRes = mpHeadCut.segmenter.segment(headCanvas);
+    const catMask = segRes?.categoryMask;
+    if (!catMask || typeof catMask.getAsUint8Array !== "function") return false;
+
+    const cats = catMask.getAsUint8Array();
+    const keep = new Set(HEAD_CUT.keepCategories);
+
+    let alpha = new Uint8ClampedArray(w * h);
+    for (let i = 0; i < w * h; i++) {
+        const x = i % w;
+        const y = (i / w) | 0;
+
+        // ROI gate
+        if (x < roi.x || x >= roi.x + roi.w || y < roi.y || y >= roi.y + roi.h) {
+            alpha[i] = 0;
+            continue;
+        }
+        // ⛔ Corte de cuello: no queremos cuello/pecho aunque la segmentación lo detecte
+        if (neckCutY != null && y > neckCutY) {
+            alpha[i] = 0;
+            continue;
+        }
+
+        alpha[i] = keep.has(cats[i]) ? 255 : 0;
+    }
+
+    // 3) Dilate (evita “mordidas” en pelo)
+    alpha = dilateMask(alpha, w, h, HEAD_CUT.dilatePx | 0);
+
+    // 4) Feather (suaviza borde) usando blur sobre la máscara
+    let alphaFinal = alpha;
+    const feather = HEAD_CUT.featherPx | 0;
+    if (feather > 0) {
+        const maskCanvas = document.createElement("canvas");
+        maskCanvas.width = w;
+        maskCanvas.height = h;
+        const mctx = maskCanvas.getContext("2d", { alpha: true, willReadFrequently: true });
+        const img = mctx.createImageData(w, h);
+        for (let i = 0; i < w * h; i++) {
+            const o = i * 4;
+            img.data[o + 3] = alpha[i];
+        }
+        mctx.putImageData(img, 0, 0);
+
+        const tmp = document.createElement("canvas");
+        tmp.width = w;
+        tmp.height = h;
+        const tctx = tmp.getContext("2d", { alpha: true, willReadFrequently: true });
+        tctx.filter = `blur(${feather}px)`;
+        tctx.drawImage(maskCanvas, 0, 0);
+        tctx.filter = "none";
+
+        const blurred = tctx.getImageData(0, 0, w, h).data;
+        alphaFinal = new Uint8ClampedArray(w * h);
+        for (let i = 0; i < w * h; i++) alphaFinal[i] = blurred[i * 4 + 3];
+    }
+
+
+    // 4b) Tighten alpha: bordes más limpios y naturales (menos ruido en zonas delicadas)
+    const tighten = HEAD_CUT.alphaTighten;
+    if (tighten && (tighten.lo != null || tighten.hi != null || tighten.gamma != null)) {
+        const lo = Math.max(0, Number(tighten.lo ?? 0)) / 255;
+        const hi = Math.min(255, Number(tighten.hi ?? 255)) / 255;
+        const gamma = Math.max(0.01, Number(tighten.gamma ?? 1));
+        const inv = 1 / Math.max(1e-6, (hi - lo));
+        for (let i = 0; i < w * h; i++) {
+            let a = alphaFinal[i] / 255;
+            a = (a - lo) * inv;
+            a = a < 0 ? 0 : a > 1 ? 1 : a;
+            // smoothstep
+            a = a * a * (3 - 2 * a);
+            a = Math.pow(a, gamma);
+            alphaFinal[i] = (a * 255) | 0;
+        }
+    }
+
+    // 5) Aplicar alphaFinal al headCanvas (multiplicando alpha existente)
+    const ctx = headCanvas.getContext("2d", { alpha: true, willReadFrequently: true });
+    const frame = ctx.getImageData(0, 0, w, h);
+    const d = frame.data;
+    for (let i = 0; i < w * h; i++) {
+        const o = i * 4;
+        const a0 = d[o + 3];
+        const a1 = alphaFinal[i];
+        d[o + 3] = (a0 * a1) / 255;
+    }
+    ctx.putImageData(frame, 0, 0);
     return true;
 }
 const HEAD_PRESETS = {
@@ -1317,7 +1587,7 @@ function startProgress(durationMs) {
 }
 
 function runCountdown() {
-    const steps = [5, 4, 3, 2, 1, 0];
+    const steps = [8, 7, 6, 5, 4, 3, 2, 1, 0];
     const stepMs = 1000;
     const lastMs = 250; // el 0 se ve un instante y dispara captura
     const total = (steps.length - 1) * stepMs + lastMs;
@@ -1402,6 +1672,8 @@ function stopRenderLoop() {
 ========================= */
 
 function renderFrame(now = performance.now()) {
+    // Si se llama como renderFrame(performance.now(), true) hacemos un render puntual (sin loop)
+    const once = arguments[1] === true;
     const v = el.camera;
     const c = el.cameraCanvas;
     if (!v || !c) return;
@@ -1413,7 +1685,7 @@ function renderFrame(now = performance.now()) {
     // “Cine” 30fps: baja CPU sin cambiar tu UI
     const interval = 1000 / (UX.targetFps || 60);
     if (UX.targetFps && now - state.lastRenderTs < interval) {
-        state.renderReq = requestAnimationFrame(renderFrame);
+        if (!once) state.renderReq = requestAnimationFrame(renderFrame);
         return;
     }
     state.lastRenderTs = now;
@@ -1425,7 +1697,7 @@ function renderFrame(now = performance.now()) {
         ctx.fillStyle = `rgb(${BG_RGB[0]}, ${BG_RGB[1]}, ${BG_RGB[2]})`;
         ctx.fillRect(0, 0, c.width, c.height);
         ctx.restore();
-        state.renderReq = requestAnimationFrame(renderFrame);
+        if (!once) state.renderReq = requestAnimationFrame(renderFrame);
         return;
     }
 
@@ -1636,7 +1908,7 @@ function renderFrame(now = performance.now()) {
 
     ctx.putImageData(imageData, 0, 0);
 
-    state.renderReq = requestAnimationFrame(renderFrame);
+    if (!once) state.renderReq = requestAnimationFrame(renderFrame);
 }
 
 /* =========================
@@ -1788,6 +2060,11 @@ async function setView(next) {
         }
 
         await waitVideoReady(el.camera);
+
+        // ✅ Preload de segmentación/landmarks mientras el usuario se alinea (menos lag al capturar)
+        if (HEAD_CUT?.enabled) {
+            initMediaPipeHeadCut().catch(() => { /* silent */ });
+        }
 
         // Sin segmentación externa: el recorte final se hace por silueta (Pantalla 2).
 
@@ -2003,40 +2280,42 @@ function guideCircleForHeadCanvas(headCanvas) {
 
 function drawGlassesOnHead(headCanvas, caretaId, glassesImg, guideInHead = null) {
     if (!headCanvas || !glassesImg) return;
-
+  
     const ctx = headCanvas.getContext("2d", { alpha: true });
-
+  
+    // ✅ IMPORTANTE: re-activar suavizado solo para la capa de gafas
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+  
     const aspect = (glassesImg.width && glassesImg.height) ? (glassesImg.width / glassesImg.height) : 2;
-
-    // Si tenemos guía real en Pantalla 2, mandamos con eso (P0: guía que impacta de verdad)
+  
     if (COMPOSE.useGlassesGuide && guideInHead && Number.isFinite(guideInHead.cx) && Number.isFinite(guideInHead.cy) && Number.isFinite(guideInHead.w) && guideInHead.w > 4) {
-        const targetW = guideInHead.w * (COMPOSE.glassesScale ?? 1);
-        const targetH = targetW / aspect;
-
-        // opcional: pequeña rotación por careta (si algún día lo necesitáis)
-        const fit = GLASSES_FIT[caretaId] || { r: 0 };
-        ctx.save();
-        ctx.translate(guideInHead.cx, guideInHead.cy);
-        ctx.rotate(((fit.r || 0) * Math.PI) / 180);
-        ctx.drawImage(glassesImg, -targetW / 2, -targetH / 2, targetW, targetH);
-        ctx.restore();
-        return;
+      const targetW = guideInHead.w * (COMPOSE.glassesScale ?? 1);
+      const targetH = targetW / aspect;
+  
+      const fit = GLASSES_FIT[caretaId] || { r: 0 };
+      ctx.save();
+      ctx.translate(guideInHead.cx, guideInHead.cy);
+      ctx.rotate(((fit.r || 0) * Math.PI) / 180);
+      ctx.drawImage(glassesImg, -targetW / 2, -targetH / 2, targetW, targetH);
+      ctx.restore();
+      return;
     }
-
-    // Fallback: comportamiento antiguo (por si no existe guía o falla el DOM)
+  
     const fit = GLASSES_FIT[caretaId] || { x: 0.5, y: 0.47, s: 0.8, r: 0 };
     const targetW = headCanvas.width * fit.s * (COMPOSE.glassesScale ?? 1);
     const targetH = targetW / aspect;
-
+  
     const x = headCanvas.width * fit.x;
     const y = headCanvas.height * fit.y;
-
+  
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate((fit.r * Math.PI) / 180);
     ctx.drawImage(glassesImg, -targetW / 2, -targetH / 2, targetW, targetH);
     ctx.restore();
-}
+  }
+  
 
 
 async function capturePhoto() {
@@ -2049,6 +2328,23 @@ async function capturePhoto() {
     const careta = state.selectedCareta || CARETAS[0];
     const glassesImg = await getGlassesImage(careta);
 
+    // ✅ Calidad sin blur en Pantalla 3:
+    // Si luego escalas el recorte en el póster (sendS>1), forzamos un render puntual a DPR 2
+    // antes de capturar, para que el PNG salga con más píxeles (sin tocar tu layout).
+    try {
+        const sendScope = getSendTuneScope() || document.documentElement;
+        const sendS = readCssVarNumber(sendScope, "--send-s", 1) || 1;
+        const desiredDpr = Math.min(2, Math.max(1, Math.ceil(sendS)));
+        if (desiredDpr > 1) {
+            const prevForce = CAM.forceDpr;
+            CAM.forceDpr = desiredDpr;
+            // evitamos que el limiter de FPS “salte” el render
+            state.lastRenderTs = 0;
+            renderFrame(performance.now(), true);
+            CAM.forceDpr = prevForce;
+        }
+    } catch { /* noop */ }
+
     // 1) Creamos un “srcCanvas” que es EXACTAMENTE lo que el usuario ve (espejado)
     const srcCanvas = uiCanvas;
 
@@ -2057,9 +2353,12 @@ async function capturePhoto() {
     // 2) Extraemos crop 1:1 (sin reescalado) centrado en la guía de Pantalla 2
     const headCanvas = extractHeadCanvas(srcCanvas, uiCanvas);
 
-    // 3) Aplicamos óvalo + feather (un poco más grande que la guía)
-    if (GUIDE_MASK.enabled) {
-        applyGuideMaskToHeadCanvas(headCanvas, uiCanvas);
+    // 3) Recorte real de cabeza (pelo + cara) por segmentación (sin óvalo)
+    // Nota: si MediaPipe no está disponible, no bloqueamos la captura; simplemente no aplicamos head cutout.
+    try {
+        await applyHeadCutoutToCanvas(headCanvas);
+    } catch (e) {
+        // silent fail: el kiosco no se cae por una IA que no quiso cooperar hoy
     }
 
     // 4) Pintamos gafas encima (sin re-rasterizar en CSS)

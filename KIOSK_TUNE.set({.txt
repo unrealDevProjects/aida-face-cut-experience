@@ -1,0 +1,38 @@
+KIOSK_TUNE.set({
+
+  capY: "850px",          // baja el pack (círculo + referencia)
+
+  capCircleW: "320px",    // tamaño del círculo
+
+  glassesNudgeX: "0px",   // micro ajuste X de gafas
+
+  glassesNudgeY: "18px",  // micro ajuste Y de gafas
+
+  glassesNudgeS: 0.80     // escala de gafas
+
+});
+ 
+
+
+Contador
+
+KIOSK_TUNE.set({
+  capCounterX: 'calc(var(--cap-x) + 250px)',
+  capCounterY: 'calc(var(--cap-y) + 30px)',
+  capCounterW: '140px'   // <- escala global del número y del anillo
+});
+
+
+
+Camara
+
+KIOSK_TUNE.set({
+  camX: "0px",   // mueve el vídeo en X
+  camY: "0px",   // mueve el vídeo en Y
+  camS: 0.93        // escala/zoom del vídeo (1 = sin reescalado)
+});
+
+
+Careta
+
+KIOSK_TUNE.set({ sendX: "0px", sendY: "-140px", sendS: 1.1 });
