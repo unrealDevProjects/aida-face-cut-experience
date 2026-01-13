@@ -1,6 +1,6 @@
 KIOSK_TUNE.set({
 
-  capY: "850px",          // baja el pack (círculo + referencia)
+  capY: "780px",          // baja el pack (círculo + referencia)
 
   capCircleW: "320px",    // tamaño del círculo
 
