@@ -1,4 +1,4 @@
-#!C:\Users\formi\Documents\dev\aida-face-cut-experience\server\.venv\Scripts\python.exe
+#!C:\Users\gmartinez\Documents\dev\aida-face-cut-experience\aida-face-cut-experience\server\.venv\Scripts\python.exe
 
 import sys
 import json

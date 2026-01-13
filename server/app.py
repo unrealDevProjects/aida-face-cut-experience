@@ -2,6 +2,7 @@ import os
 import base64
 import uuid
 from datetime import datetime
+from urllib.parse import quote
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -77,7 +78,9 @@ def snapshot(payload: SnapshotIn):
             ContentDisposition="inline",
         )
 
-        public_url = f"https://{BUCKET_NAME}.{REGION}.digitaloceanspaces.com/{object_key}"
+        do_url = f"https://{BUCKET_NAME}.{REGION}.digitaloceanspaces.com/{object_key}"
+        # Pasar la URL de DigitalOcean a través del middleware
+        public_url = f"https://middleware-picture-aida.onrender.com/?image={quote(do_url, safe='')}"
         return {"success": True, "url": public_url, "filename": filename}
 
     except NoCredentialsError:

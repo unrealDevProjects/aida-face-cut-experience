@@ -19,13 +19,19 @@ Este proyecto funciona con **2 servidores**:
 
 ---
 
-## 1) Backend (FastAPI) — puerto 8001
+## 1) Instala dependencias
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 
-### Windows (PowerShell)
-```powershell
+---
+
+## 2) Backend (FastAPI) — puerto 8001
+
+### Windows (CMD)
+```CMD
 cd server
 py -m venv .venv
-.\.venv\Scripts\Activate.ps1
+.venv\Scripts\activate
 pip install -r requirements.txt
 py -m uvicorn app:app --host 0.0.0.0 --port 8001 --reload
 ```
@@ -45,7 +51,7 @@ python -m uvicorn app:app --host 0.0.0.0 --port 8001 --reload
 
 ---
 
-## 2) Frontend (estático) — puerto 8000
+## 3) Frontend (estático) — puerto 8000
 
 Abre **otra terminal** en la raíz del proyecto (donde está `index.html`).
 
@@ -64,7 +70,7 @@ python3 -m http.server 8000
 
 ---
 
-## 3) Flujo de prueba rápido
+## 4) Flujo de prueba rápido
 1. Abre `http://localhost:8000`
 2. Acepta permisos de cámara
 3. Haz una captura
@@ -73,7 +79,7 @@ python3 -m http.server 8000
 
 ---
 
-## 4) Si algo falla (lo típico)
+## 5) Si algo falla (lo típico)
 - **“Port already in use”** → usa `docs/TROUBLESHOOTING.md`
 - **CORS** → confirma que el frontend corre en `http://localhost:8000` (no `file://`)
 - **Cámara no abre** → solo funciona en `localhost`/HTTPS; no en IP remota sin HTTPS
