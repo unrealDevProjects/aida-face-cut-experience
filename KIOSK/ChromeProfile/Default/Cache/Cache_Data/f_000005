@@ -1,0 +1,1078 @@
+/* =========================
+   1) Básicos
+========================= */
+
+/* Fuente ITC Avant Garde Gothic */
+@font-face {
+    font-family: 'ITC Avant Garde Gothic';
+    src: url('../assets/ITC Avant Garde Gothic Std Bold.otf') format('opentype');
+    font-weight: 700;
+    font-style: normal;
+    font-display: swap;
+}
+
+:root {
+    /* SEND: Ajuste vertical de la cabeza (Pantalla 3) */
+    --send-head-top: 260px; /* + = más abajo */
+
+    /* SEND: Ajustes manuales (Pantalla 3) */
+    --send-x: 0px;
+    --send-y: -120px;
+    --send-s: 1;
+
+    --w: 1080;
+    --h: 1920;
+
+    --bg: #e33220;
+    --white: #fff;
+    --black: #000;
+
+    --shadow: 0 12px 30px rgb(0 0 0 / .25);
+    --soft: 0 8px 18px rgb(0 0 0 / .18);
+
+    --pad-x: 72px;
+    --pad-top: 56px;
+    --pad-bot: 66px;
+}
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    height: 100%;
+}
+
+body {
+    margin: 0;
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    background: #111;
+    overflow: hidden;
+}
+
+img {
+    max-width: 100%;
+    height: auto;
+}
+
+button,
+input {
+    font: inherit;
+}
+
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    border: 0;
+}
+
+/* =========================
+   2) Estructura
+========================= */
+
+#viewport {
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+    background: #111;
+}
+
+/* Stage 1080x1920: se escala con JS */
+#stage {
+    width: calc(var(--w) * 1px);
+    height: calc(var(--h) * 1px);
+    background: var(--bg);
+    background-image: url("../assets/Fondo.png");
+    background-size: cover;
+    background-position: center;
+    position: absolute;
+    top: 0;
+    left: 0;
+    transform-origin: 0 0;
+    overflow: hidden;
+}
+
+/* Marco */
+.frame-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: url("../assets/Marco.png") center/cover no-repeat;
+    z-index: 3;
+}
+
+/* Vistas */
+.view {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .18s ease;
+}
+
+.view.is-active {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.content {
+    position: relative;
+    display: grid;
+    justify-items: center;
+    align-content: center;
+    padding: var(--pad-top) var(--pad-x) var(--pad-bot);
+}
+
+/* =========================
+   3) Enlaces / Botones
+========================= */
+
+.img-btn {
+    background: transparent;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    filter: drop-shadow(0 12px 18px rgb(0 0 0 / .25));
+}
+
+.ghost-btn {
+    background: rgb(255 255 255 / .14);
+    border: 2px solid rgb(255 255 255 / .22);
+    color: var(--white);
+    padding: 14px 18px;
+    border-radius: 999px;
+    cursor: pointer;
+}
+
+/* =========================
+   4) HOME
+========================= */
+
+.home-view .topbar,
+.home-view .bottombar {
+    display: none;
+}
+
+.content.home {
+    gap: 24px;
+    padding-top: 48px;
+    padding-bottom: 32px;
+    justify-items: center;
+    align-content: center;
+}
+
+.home-logo {
+    position: absolute;
+    top: 200px;
+    width: 250px;
+    filter: drop-shadow(0 10px 18px rgb(0 0 0 / .18));
+    scale: 1.7;
+}
+
+.home-title {
+    display: grid;
+    gap: 12px;
+    justify-items: center;
+}
+
+.home-text-crea {   
+    position: absolute;
+    top: 480px;
+    width: 850px;
+    scale: 0.95;
+}
+
+.home-text-cartel {
+    position: absolute;
+    top: 1320px;
+    width: 850px;
+}
+
+.home-faces {
+    position: absolute;
+    top: 590px;
+    width: 100%;
+    max-width: 780px;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 24px 10px;
+    justify-items: center;
+    scale: 1.15;
+}
+
+.face-btn {
+    background: transparent;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+}
+
+.img-btn,
+.ghost-btn,
+.capture-btn img {
+    transition: transform 0.18s ease, filter 0.18s ease;
+}
+
+.img-btn:hover,
+.ghost-btn:hover,
+.capture-btn:hover img {
+    transform: scale(1.05);
+    filter: drop-shadow(0 18px 24px rgb(0 0 0 / .26)) brightness(1.03);
+}
+
+.img-btn:active,
+.ghost-btn:active,
+.capture-btn:active img {
+    transform: scale(0.96);
+    filter: drop-shadow(0 12px 18px rgb(0 0 0 / .22)) brightness(0.97);
+}
+
+.face-btn img {
+    width: 190px;
+    filter: drop-shadow(0 12px 18px rgb(0 0 0 / .24));
+    transition: transform 0.18s ease, filter 0.18s ease;
+}
+
+/* Centrales más grandes (2 y 5) */
+.home-faces .face-btn:nth-child(2) img,
+.home-faces .face-btn:nth-child(5) img {
+    transform: scale(1.55);
+}
+
+/* Bajar la cara inferior central (5) */
+.home-faces .face-btn:nth-child(5) {
+    transform: translateY(50px);
+}
+
+/* Ajustar escala de los chicos de la derecha (3 y 6) */
+.home-faces .face-btn:nth-child(3) img {
+    transform: scale(1.20);
+}
+
+.home-faces .face-btn:nth-child(6) img {
+    transform: scale(1.20);
+    scale: 0.9;
+}
+
+/* Animaciones hover/active unificadas */
+.home-faces .face-btn:hover img {
+    transform: scale(1.15);
+    filter: drop-shadow(0 18px 24px rgb(0 0 0 / .28)) brightness(1.05);
+}
+
+.home-faces .face-btn:active img {
+    transform: scale(0.95);
+    filter: drop-shadow(0 12px 18px rgb(0 0 0 / .22)) brightness(0.96);
+}
+
+.home-text-selecciona {
+    position: absolute;
+    top: 1700px;
+    width: 560px;
+    opacity: .92;
+}
+
+/* =========================
+   5) CAPTURE
+========================= */
+
+.view[data-view="capture"]>.bottombar {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 60px;
+    padding: 0 var(--pad-x) 0;
+}
+
+.camera-shell {
+    width: 100%;
+    max-width: 1040px;
+    height: calc(100vh - 320px);
+    max-height: 1500px;
+    position: relative;
+    display: grid;
+    place-items: center;
+    margin-top: 0;
+    overflow: visible;
+    padding: 0; /* ✅ NO tocamos el tamaño del preview */
+    isolation: isolate;
+}
+
+/* Marco visual SIN afectar el tamaño del canvas (no cambia la escala) */
+.camera-shell::after{
+    content:"";
+    position:absolute;
+    inset:0;
+    border:6px solid #fff;
+    border-radius:28px;
+    box-shadow:
+        0 0 0 2px rgba(0,0,0,.10),
+        0 15px 40px rgba(0,0,0,.40),
+        inset 0 0 30px rgba(0,0,0,.08);
+    pointer-events:none;
+    z-index:5;
+}
+
+
+#cameraCanvas {
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    border: 0;          /* ✅ el marco lo pinta ::after */
+    border-radius: 28px;
+    box-shadow: none;   /* ✅ el marco lo pinta ::after */
+    transform: scaleX(-1);
+    display: block;
+}
+
+
+#camera {
+    position: absolute;
+    inset: 0;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.capture-text {
+    position: absolute;
+    top: 36px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 90%;
+    max-width: 920px;
+    
+    /* Texto directo sobre el fondo */
+    font-family: 'ITC Avant Garde Gothic', 'Avant Garde Gothic', sans-serif;
+    font-weight: 700;
+    font-size: 34px;
+    color: #fff;
+    text-align: center;
+    line-height: 1.3;
+    
+    /* Sombra para legibilidad */
+    text-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    
+    /* Anti-aliasing */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    
+    margin: 0;
+}
+
+.capture-logo {
+    position: absolute;
+    bottom: 150px;
+    left: 60%;
+    transform: translateX(-50%);
+    width: 320px;
+    max-width: 35%;
+    height: auto;
+    opacity: 0.95;
+    filter: drop-shadow(0 8px 18px rgba(0, 0, 0, 0.3));
+    pointer-events: none;
+    scale: 1.5;
+}
+
+.capture-circle {
+    position: absolute;
+    top: 140px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 50%;
+    max-width: 520px;
+}
+
+.capture-counter {
+    position: absolute;
+    top: 160px;
+    right: 120px;
+    width: 90px;
+}
+
+
+.capture-countdown {
+    position: absolute;
+    top: 160px;
+    right: 120px;
+    width: 90px;
+    height: 90px;
+    display: grid;
+    place-items: center;
+    pointer-events: none;
+}
+
+.capture-countdown.is-hidden,
+.view[data-view="capture"] .capture-countdown.is-hidden {
+    display: none !important;
+    opacity: 0 !important;
+}
+
+.capture-countdown-num {
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    font-style: normal;
+    font-weight: 900;
+    line-height: 1;
+    text-align: center;
+    color: #fff;
+    text-shadow: 0 10px 18px rgb(0 0 0 / .22);
+    transform: none;
+}
+
+.capture-btn {
+    position: absolute;
+    bottom: 70px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: transparent;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+.capture-btn img {
+    display: block;
+    width: 320px;
+    height: auto;
+}
+
+.capture-instructions.is-hidden,
+.camera-status.is-hidden {
+    display: none;
+}
+
+.capture-instructions {
+    margin: 10px 0 10px;
+    color: rgb(255 255 255 / .9);
+    font-size: 26px;
+    text-align: center;
+}
+
+/* =========================
+   6) SEND / Poster
+========================= */
+
+.poster {
+    gap: 24px;
+    justify-items: center;
+    align-content: center;
+}
+
+.poster-cines {
+    width: 68%;
+    max-width: 780px;
+    margin-top: 20px;
+}
+
+.poster-head {
+    width: 88%;
+    max-width: 980px;
+    display: grid;
+    place-items: center;
+}
+
+.poster-head img {
+    width: 92%;
+    max-width: 780px;
+    height: auto;
+
+    /* ✅ NO re-rasterizamos en Pantalla 3:
+       El óvalo + feather vienen "horneados" desde el canvas de captura. */
+    
+    /* ✅ Sombra elegante para dar profundidad */
+    filter: drop-shadow(0 15px 35px rgba(0, 0, 0, 0.5));
+    
+    clip-path: none;
+    -webkit-mask-image: none;
+    mask-image: none;
+
+    object-fit: contain;
+}
+
+.poster-paco {
+    width: 70%;
+    max-width: 820px;
+}
+
+.poster-logos {
+    width: 76%;
+    max-width: 860px;
+    margin-bottom: 20px;
+    scale: 0.95;
+}
+
+/* Blur para modal */
+.blur-out {
+    transition: filter 0.6s ease;
+    filter: blur(14px);
+    opacity: 1;
+}
+
+/* =========================
+   OVERRIDES (Kiosko): Home / Capture / Send — layout pixel-perfect
+   Pegar siempre AL FINAL del CSS (prioridad máxima)
+========================= */
+
+/* HOME — “Selecciona…” detrás de las caras (por si lo mueves luego) */
+.home-view .home-faces {
+    position: relative;
+    z-index: 6;
+}
+
+.home-view .home-text-selecciona {
+    position: absolute;
+    z-index: 4;
+    pointer-events: none;
+}
+
+/* CAPTURE — full-bleed (canvas grande + overlays como referencia) */
+.view[data-view="capture"] {
+    display: block;
+
+    /* =========================================================
+       ✅ CAPTURE TUNE (TOCAR SOLO ESTO EN EL VENUE)
+       Edita estos valores y verás cambios inmediatos en:
+       - Círculo/guía de cara
+       - Guía de gafas (se posiciona por JS, pero con nudges manuales)
+       - Contador
+       --------------------------------------------------------- */
+
+    /* Centro del “pack” (cara + gafas). 50% = centrado perfecto */
+    --cap-x: 50%;
+    /* Sube/baja todo el pack (en px dentro del stage 1080×1920) */
+    --cap-y: 250px;
+
+    /* Tamaño de la guía de cara (px) */
+    --cap-circle-w: 560px;
+
+    /* ✅ Cámara (preview): mueve/escala el frame del vídeo (por defecto 1:1) */
+    --cam-x: 0px;   /* +derecha / -izquierda */
+    --cam-y: 0px;   /* +abajo   / -arriba */
+    --cam-s: 1;     /* 1 = sin zoom (no reescalado) */
+
+    /* Marco del preview (coords se actualizan desde JS con el área real dibujada) */
+    --cam-frame-x: 0px;
+    --cam-frame-y: 0px;
+    --cam-frame-w: 0px;
+    --cam-frame-h: 0px;
+    --cam-frame-r: 28px;
+
+    /* ✅ GAFAS: el JS las alinea con el círculo.
+       Estos 3 valores son tu “volante” para afinar in situ. */
+    --cap-glasses-nudge-x: 0px;  /* +derecha / -izquierda */
+    --cap-glasses-nudge-y: 0px;  /* +abajo   / -arriba */
+    --cap-glasses-nudge-s: 1;    /* 1 = igual, 1.08 = +8% */
+
+    /* Contador: independiente, pero por defecto sigue el pack */
+    --cap-counter-x: calc(var(--cap-x) + 330px);
+    --cap-counter-y: calc(var(--cap-y) + 30px);
+    --cap-counter-w: 150px;
+}
+
+.view[data-view="capture"] .content.capture {
+    position: absolute;
+    inset: 0;
+    height: 100%;
+    padding: 0;
+}
+
+.view[data-view="capture"] .camera-shell {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    overflow: visible; /* ✅ para que la sombra se vea */
+}
+
+
+.view[data-view="capture"] #cameraCanvas {
+    position: absolute;
+    inset: 0;     /* ✅ sin shrink -> misma escala que el layout base */
+    width: 100%;
+    height: 100%;
+    background: transparent;
+
+    /* Importante: el marco del preview NO va en el canvas (queda tapado por el frame global).
+       El marco se dibuja con .camera-shell::after usando coords reales del vídeo. */
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+}
+
+
+/* =========================
+   CAPTURE: Marco premium del preview (solo visual)
+   - Esquinas redondeadas + borde blanco + “presencia” (shadow)
+   - Se posiciona usando coords reales del vídeo dibujado (NO CSS scale)
+========================= */
+.view[data-view="capture"] .camera-shell{
+    /* el marco necesita salirse un poco para el shadow */
+    overflow: visible;
+}
+.view[data-view="capture"] .camera-shell::after{
+    content: "";
+    position: absolute;
+    left: var(--cam-frame-x);
+    top: var(--cam-frame-y);
+    width: var(--cam-frame-w);
+    height: var(--cam-frame-h);
+    border-radius: var(--cam-frame-r);
+    pointer-events: none;
+    z-index: 8;
+
+    /* borde blanco + línea oscura fina + sombra exterior + sombra interior suave */
+    box-shadow:
+      0 0 0 6px rgb(255 255 255 / .92),
+      0 0 0 8px rgb(0 0 0 / .12),
+      0 24px 70px rgb(0 0 0 / .35),
+      inset 0 0 26px rgb(0 0 0 / .12);
+}
+
+
+
+.view[data-view="capture"] .capture-text {
+    top: 92px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 760px;
+    max-width: none;
+    opacity: .96;
+    filter: drop-shadow(0 8px 16px rgb(0 0 0 / .18));
+    pointer-events: none;
+}
+
+.view[data-view="capture"] .capture-circle {
+    top: var(--cap-y);
+    left: var(--cap-x);
+    transform: translateX(-50%);
+    width: var(--cap-circle-w);
+    max-width: none;
+    opacity: .98;
+    pointer-events: none;
+}
+
+.view[data-view="capture"] .capture-glasses-guide {
+    position: absolute;
+    /* ⚠️ top/left/width los setea el JS para que coincida con la composición.
+       Si necesitas afinar, usa --cap-glasses-nudge-x / y / s en CAPTURE TUNE. */
+    max-width: none;
+    opacity: .32;
+    pointer-events: none;
+    z-index: 22; /* encima del círculo, debajo del contador */
+    filter: drop-shadow(0 10px 18px rgb(0 0 0 / .18));
+    mix-blend-mode: screen;
+}
+
+.view[data-view="capture"] .capture-glasses-guide.is-hidden { display: none; }
+
+
+.view[data-view="capture"] .capture-countdown {
+    position: absolute;
+    top: var(--cap-counter-y);
+    left: var(--cap-counter-x);
+    right: auto;
+    width: var(--cap-counter-w);
+    height: var(--cap-counter-w);
+    opacity: .98;
+    pointer-events: none;
+    z-index: 26; /* por encima del anillo */
+    display: grid;
+    place-items: center;
+    transition: opacity .2s ease, transform .25s ease;
+}
+
+.view[data-view="capture"] .capture-countdown-num {
+    font-family: inherit;
+    font-weight: 900;
+    font-style: normal;
+    font-size: calc(var(--cap-counter-w) * 0.78);
+    line-height: 1;
+    letter-spacing: -0.02em;
+    color: #fff;
+    text-shadow: 0 10px 18px rgb(0 0 0 / .22);
+    -webkit-user-select: none;
+    user-select: none;
+    transform: none;
+}
+
+.capture-countdown.is-pulse .capture-countdown-num {
+    transform: scale(1.06);
+    transition: transform .22s ease;
+}
+
+.view[data-view="capture"] .capture-btn {
+    bottom: 150px;
+    left: 50%;
+    transform: translateX(-50%);
+    filter: drop-shadow(0 18px 22px rgb(0 0 0 / .28));
+}
+
+.view[data-view="capture"] .capture-btn img {
+    width: 420px;
+    height: auto;
+}
+
+/* SEND (Pantalla 3) — póster como referencia */
+.view[data-view="send"] {
+    display: block;
+}
+
+.view[data-view="send"] .content.send.poster {
+    position: absolute;
+    inset: 0;
+    padding: 0;
+    height: 100%;
+    display: block;
+}
+
+.view[data-view="send"] .poster-cines {
+    position: absolute;
+    top: 200px;
+    left: 40%;
+    transform: translateX(-50%);
+    width: 540px;
+    max-width: none;
+    opacity: .95;
+    z-index: 2;
+    scale: 0.60;
+}
+
+.view[data-view="send"] .poster-head {
+    position: absolute;
+    top: 220px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 860px;
+    max-width: none;
+    display: grid;
+    place-items: center;
+}
+
+.view[data-view="send"] .poster-head img {
+    width: 860px;
+    max-width: none;
+    height: auto;
+    border-radius: 999px;
+    clip-path: none;
+    -webkit-mask-image: none;
+    mask-image: none;
+    object-fit: contain;
+    filter: drop-shadow(0 20px 34px rgb(0 0 0 / .28));
+}
+
+.view[data-view="send"] .poster-logo {
+    position: absolute;
+    top: 1300px;
+    left: 68%;
+    transform: translateX(-50%);
+    width: 320px;
+    max-width: none;
+    opacity: .95;
+    scale: 2.2;
+}
+
+.view[data-view="send"] .poster-paco {
+    position: absolute;
+    top: 1550px;
+    left: 36%;
+    transform: translateX(-50%);
+    width: 720px;
+    max-width: none;
+    scale: 0.55;
+}
+
+.view[data-view="send"] .poster-logos {
+    position: absolute;
+    bottom: 120px;
+    left: 42.5%;
+    transform: translateX(-50%);
+    width: 820px;
+    max-width: none;
+    opacity: .98;
+    scale: 0.8;
+}
+
+/* =========================
+   MODAL (IFRAME) — centrado en el “marco” + responsive
+========================= */
+
+:root {
+    /* las rellena el JS en scaleStage() */
+    --stage-px-w: 100vw;
+    --stage-px-h: 100vh;
+    --stage-px-x: 0px;
+    --stage-px-y: 0px;
+    --stage-scale: 1;
+}
+
+/* En vez de blur, oscurecemos el stage */
+#stage::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: rgb(0 0 0 / .55);
+    opacity: 0;
+    transition: opacity .35s ease;
+    pointer-events: none;
+    z-index: 50;
+    /* por encima del contenido del stage */
+}
+
+#stage.dim-out::after {
+    opacity: 1;
+}
+
+/* mata el blur antiguo si lo sigues aplicando */
+.blur-out {
+    filter: none !important;
+}
+
+/* QR overlay (pantalla oscura con QR centrado) */
+.qr-overlay{
+    /* Centrado REAL dentro del stage (no del viewport) */
+    position: fixed;
+    left: var(--stage-px-x);
+    top: var(--stage-px-y);
+    width: var(--stage-px-w);
+    height: var(--stage-px-h);
+
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 60px;
+
+    z-index: 900; /* bajo el modal (z=999) pero sobre el dim */
+    pointer-events: none;
+}
+
+.qr-overlay .qr-code{
+    width: min(460px, 54%);
+    height: auto;
+    cursor: pointer;
+    pointer-events: auto;
+
+    filter: drop-shadow(0 18px 28px rgb(0 0 0 / .35));
+    transition: transform .18s ease, filter .18s ease;
+}
+
+.qr-overlay .qr-code:hover{
+    transform: scale(1.06);
+    filter: drop-shadow(0 22px 34px rgb(0 0 0 / .42));
+}
+
+.qr-overlay .qr-code:active,
+.qr-overlay .qr-code.is-pressed{
+    transform: scale(0.96);
+    filter: drop-shadow(0 14px 22px rgb(0 0 0 / .30));
+}
+
+/* Texto "Escanea para obtener tu foto." debajo del QR */
+.qr-scan-text {
+    width: min(460px, 54%); /* Mismo ancho que el QR */
+    height: auto;
+    pointer-events: none;
+    filter: drop-shadow(0 4px 8px rgb(0 0 0 / .25));
+}
+
+.qr-overlay.is-hidden{
+    display: none;
+}
+
+/* Botón "Reiniciar" debajo del QR (solo escala) */
+.btn-reiniciar {
+    background: linear-gradient(180deg, #FF6347 0%, #E8441D 100%);
+    border: 5px solid #fff;
+    border-radius: 70px;
+    padding: 24px 86px;
+
+    font-family: 'ITC Avant Garde Gothic', 'Avant Garde Gothic', sans-serif;
+    font-weight: 700;
+    font-size: 52px;
+    color: #fff;
+    letter-spacing: 0.02em;
+
+    box-shadow: 0 14px 32px rgba(0, 0, 0, 0.35);
+    cursor: pointer;
+    pointer-events: auto;
+
+    /* ✅ ÚNICA fuente de verdad del tamaño */
+    transform: scale(0.55);
+    transform-origin: center;
+
+    transition: transform .18s ease, box-shadow .18s ease, filter .18s ease;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+.btn-reiniciar:hover {
+    transform: scale(0.58);
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+    filter: brightness(1.08);
+}
+
+.btn-reiniciar:active {
+    transform: scale(0.52);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+    filter: brightness(0.95);
+}
+
+/* =========================
+   PATCH: kiosk feedback / anti-spam / cine (add-only)
+   No afecta a tu UI salvo cuando hay estados (loading/error/countdown).
+========================= */
+
+.camera-status{
+  position:absolute;
+  top: 220px; /* ✅ Bajado de 140px a 220px */
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  max-width: 860px;
+  padding: 14px 18px;
+  border-radius: 999px;
+  background: rgb(0 0 0 / .35);
+  color: rgb(255 255 255 / .92);
+  font-size: 22px;
+  text-align:center;
+  box-shadow: var(--soft);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  pointer-events: none;
+}
+.camera-status.is-error{ background: rgb(0 0 0 / .55); }
+.camera-status.is-ready{ background: rgb(0 0 0 / .40); }
+.camera-status.is-pulse{ animation: statusPulse .28s ease; }
+@keyframes statusPulse{
+  0%{ transform: translateX(-50%) scale(.98); }
+  60%{ transform: translateX(-50%) scale(1.03); }
+  100%{ transform: translateX(-50%) scale(1); }
+}
+
+.capture-btn[disabled]{ cursor:not-allowed; }
+.capture-btn[disabled] img{
+  opacity:.55;
+  filter: grayscale(.12) brightness(.9);
+  transform:none !important;
+}
+
+/* Fix “botón pillado”: no dependemos de :active del navegador */
+.capture-btn:active img{
+  transform:none;
+  filter:none;
+}
+.capture-btn.is-pressed img{
+  transform: scale(0.96);
+  filter: drop-shadow(0 12px 18px rgb(0 0 0 / .22)) brightness(0.97);
+}
+
+/* =========================
+   HOTFIX P0: Pantalla 3 sin círculo / sin re-escala
+   La foto final es el freeze-frame de Pantalla 2, a pantalla completa.
+========================= */
+
+.view[data-view="send"] .poster-cines,
+.view[data-view="send"] .poster-logo,
+.view[data-view="send"] .poster-paco,
+.view[data-view="send"] .poster-logos{
+  z-index:2;
+}
+
+/* "Cine" solo visual: no altera el PNG final */
+#cameraCanvas.is-cinematic{
+  filter: saturate(1.04) contrast(1.03);
+  transform: scaleX(-1) translateZ(0);
+}
+
+/* Progreso circular (solo si UX.enableProgressRing = true) */
+.capture-progress{
+  position:absolute;
+  top: 250px;
+  right: 190px;
+  width: 150px;
+  height: 150px;
+  z-index: 25;
+  opacity: 0;
+  transform: scale(.92);
+  transition: opacity .2s ease, transform .2s ease;
+  pointer-events:none;
+}
+.capture-progress.is-active{ opacity: 1; transform: scale(1); }
+.capture-progress-bg{
+  stroke: rgb(255 255 255 / .22);
+  stroke-width: 10;
+  fill:none;
+}
+.capture-progress-fg{
+  stroke: rgb(255 255 255 / .92);
+  stroke-width: 10;
+  fill:none;
+  stroke-linecap: round;
+  transform: rotate(-90deg);
+  transform-origin: 50% 50%;
+  stroke-dasharray: 339.292;
+  stroke-dashoffset: 339.292;
+}
+
+
+/* =========================
+   SEND: Recorte centrado + sin reescalado (Pantalla 3)
+   - La imagen ya viene con óvalo + feather “horneado” desde el canvas.
+   - Aquí solo centramos el conjunto, sin filtros ni masks CSS.
+========================= */
+
+.view[data-view="send"] .poster-head{
+  position: absolute;
+  inset: 0;
+  width: calc(var(--w) * 1px);
+  height: calc(var(--h) * 1px);
+  display: grid;
+  place-items: center;
+  z-index: 1;
+  transform: none;
+}
+
+.view[data-view="send"] .poster-head img{
+  width: auto;
+  height: auto;
+  max-width: none;
+  max-height: none;
+  object-fit: none;
+  object-position: 50% 50%;
+
+  /* Ajuste manual desde consola (KIOSK_TUNE) */
+  transform: translate3d(var(--send-x), var(--send-y), 0) scale(var(--send-s));
+  transform-origin: 50% 50%;
+
+  /* Micro-boost de rendimiento en GPU (sin cambiar look) */
+  will-change: transform;
+  backface-visibility: hidden;
+
+  /* ✅ La foto YA viene recortada con alpha (óvalo+feather). Sombra sin rerender raro */
+  filter: drop-shadow(0 20px 34px rgb(0 0 0 / .28));
+
+  border-radius: 0;
+  clip-path: none;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+
