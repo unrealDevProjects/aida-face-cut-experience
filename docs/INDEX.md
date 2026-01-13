@@ -5,3 +5,4 @@
 - `docs/BACKEND_8001.md`: backend FastAPI
 - `docs/ENV.md`: variables `.env` (subidas)
 - `docs/TROUBLESHOOTING.md`: problemas típicos
+- `docs/GIT.md`: guía rápida de Git y GitHub
