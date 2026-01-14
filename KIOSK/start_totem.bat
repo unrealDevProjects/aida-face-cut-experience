@@ -2,13 +2,13 @@
 setlocal enabledelayedexpansion
 
 REM ============================================================
-REM KIOSK STARTER (Windows 11)
+REM KIOSK STARTER (Windows 11) - FINAL
 REM - Levanta WEB (8000) + API (8001)
-REM - Abre Chrome en modo KIOSK apuntando a http://localhost:8000/
+REM - Abre Google Chrome en modo KIOSK en http://localhost:8000/
 REM ============================================================
 
 REM =========================
-REM CONFIG (AJUSTADO A TU NUEVA RUTA)
+REM CONFIG (AJUSTADO A TU RUTA)
 REM =========================
 set "URL=http://localhost:8000/"
 
@@ -48,7 +48,7 @@ if not exist "%API_DIR%\app.py" (
 if not exist "%VENV_PY%" (
   echo [ERROR] No existe: %VENV_PY%
   echo         La venv debe estar en: %API_DIR%\.venv
-  echo         Solucion:
+  echo         Solucion rapida:
   echo           cd "%API_DIR%"
   echo           py -m venv .venv
   echo           .venv\Scripts\activate
@@ -57,8 +57,15 @@ if not exist "%VENV_PY%" (
   exit /b 1
 )
 
+if not exist "%CHROME%" (
+  echo [ERROR] No encuentro Chrome en la ruta esperada.
+  echo         Instala Google Chrome o ajusta la variable CHROME.
+  pause
+  exit /b 1
+)
+
 REM =========================
-REM LIMPIA PUERTOS
+REM LIMPIA PUERTOS (por si quedó algo colgado)
 REM =========================
 call :KillPort %API_PORT%
 call :KillPort %WEB_PORT%
@@ -83,17 +90,15 @@ call :WaitHttp "http://127.0.0.1:%API_PORT%/docs" 30
 call :WaitHttp "http://127.0.0.1:%WEB_PORT%/" 30
 
 REM =========================
-REM ABRE CHROME EN MODO KIOSK
+REM CHROME KIOSK
+REM NOTA: Si Chrome ya estaba abierto, puede ignorar flags.
+REM       Por eso lo cerramos antes de abrir modo kiosko.
 REM =========================
-if not exist "%CHROME%" (
-  echo [ERROR] No encuentro Chrome. Instala Google Chrome o ajusta CHROME.
-  pause
-  exit /b 1
-)
+taskkill /F /IM chrome.exe >nul 2>&1
 
-REM Auto-aceptar UI de permisos cámara/mic (no fuerza cuál cámara exacta)
 start "" "%CHROME%" ^
   --kiosk "%URL%" ^
+  --new-window ^
   --no-first-run ^
   --disable-session-crashed-bubble ^
   --autoplay-policy=no-user-gesture-required ^
